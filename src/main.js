@@ -1,12 +1,16 @@
-// [BATTLESHIP_AR:STEP 1] AR Boot + Retikel + Brett-Platzierung
+// [BATTLESHIP_AR:STEP 2] AR Boot + Hit-Test + echtes Board + Ray-Picking (Hover/Mark)
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
+import { Board } from './board.js';
 
 let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
-let board = null; // Dummy-Brett
+let board = null;
 let referenceSpace = null;
 let controller = null;
+
+const raycaster = new THREE.Raycaster();
+const tempMatrix = new THREE.Matrix4();
 
 init();
 animate();
@@ -22,7 +26,6 @@ async function init() {
   renderer.xr.enabled = true;
   document.body.appendChild(renderer.domElement);
 
-  // Dezentes Licht
   const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
   scene.add(light);
 
@@ -35,12 +38,12 @@ async function init() {
   reticle.visible = false;
   scene.add(reticle);
 
-  // Controller
+  // Controller 0 (linke oder erste Quelle)
   controller = renderer.xr.getController(0);
   controller.addEventListener('select', onSelect);
   scene.add(controller);
 
-  // AR-Button (Hit-Test + DOM Overlay)
+  // AR-Button
   const btn = ARButton.createButton(renderer, {
     requiredFeatures: ['hit-test'],
     optionalFeatures: ['dom-overlay'],
@@ -64,7 +67,6 @@ async function onSessionStart() {
   const session = renderer.xr.getSession();
   referenceSpace = await session.requestReferenceSpace('local');
   viewerSpace = await session.requestReferenceSpace('viewer');
-  // Hit-Test-Quelle anfordern
   hitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
 }
 
@@ -79,6 +81,7 @@ function animate() {
 }
 
 function render(timestamp, frame) {
+  // Hit-Test für Retikel, solange kein Board platziert
   if (frame && hitTestSource && !board) {
     const hitTestResults = frame.getHitTestResults(hitTestSource);
     if (hitTestResults && hitTestResults.length > 0) {
@@ -87,7 +90,6 @@ function render(timestamp, frame) {
       if (pose) {
         reticle.visible = true;
         reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
-        // Orientierung flach auf die Fläche legen
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
         reticle.quaternion.setFromRotationMatrix(m);
       }
@@ -96,52 +98,60 @@ function render(timestamp, frame) {
     }
   }
 
+  // Ray-Picking nur wenn Board existiert
+  if (board) {
+    // Ray aus Controller: Ursprung an Controller-Position, Richtung -Z aus Controller-Rotation
+    tempMatrix.identity().extractRotation(controller.matrixWorld);
+    raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix).normalize();
+
+    const intersects = raycaster.intersectObject(board.pickingPlane, false);
+    if (intersects.length > 0) {
+      const p = intersects[0].point;
+      const cell = board.worldToCell(p);
+      board.setHoverCell(cell);
+    } else {
+      board.setHoverCell(null);
+    }
+  }
+
   renderer.render(scene, camera);
 }
 
-// Trigger: Brett platzieren
+// Trigger: Platzieren ODER Markieren
 function onSelect() {
-  if (!reticle.visible || board) return;
-  board = createDummyBoard();
-  board.position.copy(reticle.position);
-  board.quaternion.copy(reticle.quaternion);
-  scene.add(board);
+  // 1) Falls noch kein Board: platziere an Retikel
+  if (!board && reticle.visible) {
+    board = new Board({ size: 1.0, divisions: 10 }); // 10x10
+    board.position.copy(reticle.position);
+    board.quaternion.copy(reticle.quaternion);
+    scene.add(board);
 
-  // Kleiner Hinweis als „Bestätigung“
-  const hud = document.getElementById('hud');
-  if (hud) hud.querySelector('.small').textContent = 'Brett platziert. (Step 1 abgeschlossen)';
-}
+    const hud = document.getElementById('hud');
+    if (hud) hud.querySelector('.small').textContent = 'Brett platziert. Zielen & Trigger: Zelle markieren/entfernen.';
+    return;
+  }
 
-// Einfaches 1m x 1m Dummy-Brett mit Grid-Linien
-function createDummyBoard() {
-  const group = new THREE.Group();
+  // 2) Wenn Board existiert: Zellen-Toggle
+  if (board) {
+    tempMatrix.identity().extractRotation(controller.matrixWorld);
+    const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
+    const dir = new THREE.Vector3(0, 0, -1).applyMatrix4(tempMatrix).normalize();
+    raycaster.set(origin, dir);
 
-  // Grundfläche
-  const base = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
-    new THREE.MeshBasicMaterial({ color: 0x0a0a12, transparent: true, opacity: 0.9 })
-  );
-  base.rotateX(-Math.PI / 2);
-  group.add(base);
-
-  // Grid-Linien (10x10)
-  const divisions = 10;
-  const size = 1;
-  const grid = new THREE.GridHelper(size, divisions, 0x00ffcc, 0x00ffcc);
-  grid.material.opacity = 0.65;
-  grid.material.transparent = true;
-  grid.rotateX(Math.PI / 2); // GridHelper steht vertikal, drehen für Boden
-  group.add(grid);
-
-  // Leichter Rand
-  const border = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1.02, 1.02)),
-    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 })
-  );
-  border.rotateX(-Math.PI / 2);
-  group.add(border);
-
-  // Marker-Tag
-  group.userData.type = 'dummy-board'; // [BATTLESHIP_AR:STEP 1]
-  return group;
+    const intersects = raycaster.intersectObject(board.pickingPlane, false);
+    if (intersects.length > 0) {
+      const p = intersects[0].point;
+      const cell = board.worldToCell(p);
+      if (cell) {
+        const added = board.toggleMarker(cell);
+        const hud = document.getElementById('hud');
+        if (hud) {
+          hud.querySelector('.small').textContent = added
+            ? `Markiert: (${cell.i}, ${cell.j})`
+            : `Entfernt: (${cell.i}, ${cell.j})`;
+        }
+      }
+    }
+  }
 }
