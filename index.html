@@ -2,259 +2,29 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
+  <title>AR Battleship – Step 1</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Schiffe-Versenken AR – SV-STEP-00/01</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
-    #ui { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 14px; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, sans-serif; background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.55) 30%, rgba(0,0,0,.8) 100%); pointer-events: none; }
-    #ui .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-    .chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); pointer-events: auto; }
-    button.chip { cursor: pointer; }
-    #status { opacity: .9; }
-    #legend { font-size: 12px; opacity: .9; }
-    #legend span { opacity: .8; }
+    html, body { margin:0; padding:0; height:100%; overflow:hidden; }
+    #hud {
+      position: fixed; left: 12px; bottom: 12px; right: 12px;
+      font: 14px/1.4 system-ui, sans-serif; color: #fff;
+      background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 10px;
+      pointer-events: none;
+    }
+    .small { opacity: .85; font-size: 12px; }
   </style>
 </head>
 <body>
-  <div id="ui">
-    <div class="row">
-      <div id="status" class="chip">SV-STEP-01 • Richte das Spielbrett auf einer ebenen Fläche aus (weißer Ring) und tippe, um zu platzieren.</div>
-      <button id="reset" class="chip" title="Brett neu platzieren">Brett zurücksetzen</button>
-    </div>
-    <div id="legend" class="row" style="margin-top:8px">
-      <div class="chip">State: <strong id="state">INIT</strong></div>
-      <div class="chip">Board: <span id="boardInfo">–</span></div>
-    </div>
+  <div id="hud">
+    <div><strong>AR Battleship</strong> — Schritt 1</div>
+    <div class="small">Bewege den Blick auf eine Fläche, bis das Retikel sichtbar ist. Trigger drücken, um das Brett zu platzieren.</div>
   </div>
 
   <script type="module">
-    /*
-      ==========================================================
-      Schiffe-Versenken AR – Prototype
-      SV-STEP-00: Projekt-Scaffold (Three.js + WebXR-AR + UI)
-      SV-STEP-01: AR-HitTest + Brettplatzierung (10×10 Grid, ~60 cm)
-      ==========================================================
-
-      Dateistruktur (v1 – single file). Später splitten wir in:
-        /src/main.js      – Bootstrapping & Renderloop
-        /src/ar.js        – Hit-Test, Anker (optional), Retikel
-        /src/board.js     – Grid/Koordinaten, Zellen, visuelles Feedback
-        /src/game.js      – Zustandsmaschine
-        /src/ai.js        – Gegner-Logik
-        /src/ui.js        – HTML-Overlay
-
-      Test-Kriterien (SV-STEP-01):
-        [ ] AR-Session startet mit Passthrough
-        [ ] Weißer Retikel-Ring folgt erkannten Flächen
-        [ ] Tipp auf Controller/Tap platziert ein 10×10-Grid (~0,6 m)
-        [ ] Grid bleibt stabil im Raum, Retikel verschwindet
-        [ ] "Brett zurücksetzen" erlaubt Neuplatzierung
-    */
-
-    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-    import { ARButton } from 'https://unpkg.com/three@0.160.0/examples/jsm/webxr/ARButton.js';
-
-    // ----------------------------------------------------------
-    // SV-STEP-00: Grund-Setup
-    // ----------------------------------------------------------
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.xr.enabled = true;
-    document.body.appendChild(renderer.domElement);
-
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x222244, 1.0);
-    scene.add(hemi);
-
-    // UI
-    const stateEl = document.getElementById('state');
-    const boardInfoEl = document.getElementById('boardInfo');
-    const resetBtn = document.getElementById('reset');
-    const uiRoot = document.getElementById('ui');
-
-    // Diagnose/Status-Helfer
-    const statusEl = document.getElementById('status');
-    const log = (msg) => {
-      console.log('[SV-AR]', msg);
-      if (statusEl) statusEl.textContent = String(msg);
-    }; {
-      // Erste Statusmeldung
-      log('SV-STEP-01 • Initialisiere…');
-    }
-
-    const sessionInit = {
-      requiredFeatures: ['hit-test', 'dom-overlay'],
-      optionalFeatures: ['anchors', 'light-estimation', 'depth-sensing'],
-      domOverlay: { root: uiRoot }
-    };
-
-    // Robustere Feature-Erkennung + Fehlerfeedback
-    (async () => {
-      if (!('xr' in navigator)) {
-        log('Kein WebXR verfügbar. Bitte auf einem AR-fähigen Gerät/Browser (z. B. Meta Quest Browser) und via HTTPS öffnen.');
-        return;
-      }
-      try {
-        const supported = await navigator.xr.isSessionSupported('immersive-ar');
-        if (!supported) {
-          log('AR-Session nicht unterstützt. Prüfe Browser/Flags/Gerät.');
-          return;
-        }
-        const arBtn = ARButton.createButton(renderer, sessionInit);
-        document.body.appendChild(arBtn);
-        log('Tippe auf „Enter AR“, richte das Brett aus und platziere es.');
-      } catch (e) {
-        console.error(e);
-        log('Fehler bei der AR-Initialisierung: ' + e.message);
-      }
-    })();
-
-    // ----------------------------------------------------------
-    // SV-STEP-01: Hit-Test + Retikel + Brettplatzierung
-    // ----------------------------------------------------------
-    const cellSize = 0.06; // 6 cm pro Feld
-    const gridSize = 10;   // 10×10
-    const boardSize = cellSize * gridSize; // ca. 0,6 m
-
-    // Retikel (weißer Ring)
-    const reticle = new THREE.Mesh(
-      new THREE.RingGeometry(0.07, 0.075, 48).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 })
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    scene.add(reticle);
-
-    // Controller (für "select"-Events in AR)
-    const controller = renderer.xr.getController(0);
-    scene.add(controller);
-
-    // Board-Gruppe (Grid + Bodenplatte leicht transparent)
-    const boardGroup = new THREE.Group();
-    boardGroup.visible = false;
-    scene.add(boardGroup);
-
-    // Bodenplatte
-    const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(boardSize, boardSize),
-      new THREE.MeshBasicMaterial({ color: 0x0a2a3a, transparent: true, opacity: 0.15 })
-    );
-    plate.rotation.x = -Math.PI / 2;
-    boardGroup.add(plate);
-
-    // Linien-Grid
-    const gridHelper = new THREE.GridHelper(boardSize, gridSize, 0x66ccff, 0x66ccff);
-    (gridHelper.material).opacity = 0.9;
-    (gridHelper.material).transparent = true;
-    gridHelper.position.y = 0.001; // Z-Fighting vermeiden
-    boardGroup.add(gridHelper);
-
-    // Zell-Nummern (A–J / 1–10)
-    const labelsGroup = new THREE.Group();
-    labelsGroup.position.set(-boardSize/2, 0.002, -boardSize/2);
-    boardGroup.add(labelsGroup);
-
-    const charA = 'A'.charCodeAt(0);
-    const makeText = (text, size=0.015) => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      canvas.width = 256; canvas.height = 128;
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '48px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, canvas.width/2, canvas.height/2);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.minFilter = THREE.LinearFilter;
-      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.85 });
-      const spr = new THREE.Sprite(mat);
-      spr.scale.set(size*3, size, 1);
-      return spr;
-    };
-
-    for (let i = 0; i < gridSize; i++) {
-      const letter = String.fromCharCode(charA + i);
-      const s = makeText(letter);
-      s.position.set((i + 0.5) * cellSize, 0, -0.015);
-      labelsGroup.add(s);
-    }
-    for (let j = 0; j < gridSize; j++) {
-      const num = makeText(String(j + 1));
-      num.position.set(-0.015, 0, (j + 0.5) * cellSize);
-      labelsGroup.add(num);
-    }
-
-    // Hit-Test Variablen
-    let xrSession = null;
-    let refSpace = null;
-    let viewerSpace = null;
-    let hitTestSource = null;
-    let boardPlaced = false;
-
-    // Session Events
-    renderer.xr.addEventListener('sessionstart', async () => {
-      xrSession = renderer.xr.getSession();
-      refSpace = renderer.xr.getReferenceSpace();
-      viewerSpace = await xrSession.requestReferenceSpace('viewer');
-      hitTestSource = await xrSession.requestHitTestSource({ space: viewerSpace });
-      stateEl.textContent = 'PLACE_BOARD';
-    });
-
-    renderer.xr.addEventListener('sessionend', () => {
-      xrSession = null; refSpace = null; viewerSpace = null; hitTestSource = null;
-      boardPlaced = false; reticle.visible = false; boardGroup.visible = false;
-      stateEl.textContent = 'INIT';
-      boardInfoEl.textContent = '–';
-    });
-
-    // Platzierung per Select/Tap
-    controller.addEventListener('select', () => {
-      if (!boardPlaced && reticle.visible) {
-        boardGroup.matrix.copy(reticle.matrix);
-        boardGroup.matrix.decompose(boardGroup.position, boardGroup.quaternion, boardGroup.scale);
-        boardGroup.visible = true;
-        boardPlaced = true;
-        reticle.visible = false;
-        stateEl.textContent = 'BOARD_PLACED';
-        boardInfoEl.textContent = `${gridSize}×${gridSize} @ ${(cellSize*100).toFixed(0)}mm`; 
-      }
-    });
-
-    // Reset
-    resetBtn.addEventListener('click', () => {
-      boardPlaced = false; boardGroup.visible = false; reticle.visible = true; stateEl.textContent = 'PLACE_BOARD';
-    });
-
-    // Renderloop mit Hit-Test
-    renderer.setAnimationLoop((t, frame) => {
-      if (frame && hitTestSource && !boardPlaced) {
-        const results = frame.getHitTestResults(hitTestSource);
-        if (results.length) {
-          const hit = results[0];
-          const pose = hit.getPose(refSpace);
-          if (pose) {
-            reticle.visible = true;
-            reticle.matrix.fromArray(pose.transform.matrix);
-          }
-        } else {
-          reticle.visible = false;
-        }
-      }
-      renderer.render(scene, camera);
-    });
-
-    // Resize
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    // (Optional) Debug am Desktop: Kamerabewegung blocken
-    document.addEventListener('gesturestart', e => e.preventDefault());
+    import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
+    import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
+    import './src/main.js';
   </script>
 </body>
 </html>
