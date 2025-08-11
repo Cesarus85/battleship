@@ -1,0 +1,11 @@
+{
+  "name": "ar-battleship-mp",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "signal": "node server/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
