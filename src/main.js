@@ -1,4 +1,4 @@
-// [BATTLESHIP_AR:STEP 6] Zwei Boards (Spieler & Gegner), Spielerschuss + automatischer KI-Gegenschuss
+// [BATTLESHIP_AR:STEP 6 PATCH] Raycast auf BEIDE Boards + sauberes Targeting
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
@@ -8,22 +8,21 @@ let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
 
-let boardPlayer = null;  // dein Brett (links)
-let boardAI = null;      // Gegner-Brett (rechts)
+let boardPlayer = null;
+let boardAI = null;
 let game = null;
 
 const controllers = [];
 const raycaster = new THREE.Raycaster();
 
 let lastHoverCell = null;
+let lastHoverTarget = null; // 'player' | 'ai' | null
 let debugRay = null;
 let debugDot = null;
 
-// Button-Edge-Detection (Rotate Y/B)
 const prevButtons = new Map();
-const IDX = { TRIGGER:0, SQUEEZE:1, STICK:2, AX:3, BY:4 };
-
-const BOARD_GAP = 1.2; // Abstand zwischen den beiden Boards (Meter)
+const IDX = { BY: 4 }; // für Rotation in Platzierungsphase
+const BOARD_GAP = 1.2;
 
 init();
 animate();
@@ -40,7 +39,6 @@ async function init() {
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.0));
 
-  // Retikel
   reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
@@ -48,7 +46,6 @@ async function init() {
   reticle.visible = false;
   scene.add(reticle);
 
-  // Controller 0 & 1
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
     c.userData.index = i;
@@ -59,17 +56,13 @@ async function init() {
     controllers.push(c);
   }
 
-  // Debug
   const rayGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,0,-0.9)]);
   debugRay = new THREE.Line(rayGeom, new THREE.LineBasicMaterial({ transparent:true, opacity:0.35 }));
-  debugRay.visible = false; // bei Bedarf true
-  scene.add(debugRay);
+  debugRay.visible = false; scene.add(debugRay);
 
   debugDot = new THREE.Mesh(new THREE.SphereGeometry(0.01, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
-  debugDot.visible = false;
-  scene.add(debugDot);
+  debugDot.visible = false; scene.add(debugDot);
 
-  // AR-Button
   const btn = ARButton.createButton(renderer, {
     requiredFeatures: ['hit-test'],
     optionalFeatures: ['dom-overlay'],
@@ -81,7 +74,6 @@ async function init() {
   renderer.xr.addEventListener('sessionstart', onSessionStart);
   renderer.xr.addEventListener('sessionend', onSessionEnd);
 
-  // GameState
   game = new GameState();
   setHUD(`Phase: ${game.phase} — Platziere das AR-Brett.`);
 }
@@ -99,7 +91,7 @@ function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=nu
 function animate(){ renderer.setAnimationLoop(render); }
 
 function render(_, frame) {
-  // Hit-Test / Retikel, solange noch keine Boards stehen
+  // Hit-Test solange keine Boards
   if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
     if (hits && hits.length > 0) {
@@ -113,68 +105,85 @@ function render(_, frame) {
     } else reticle.visible = false;
   }
 
-  if (referenceSpace && frame) {
-    const ray = getXRRay(frame);
-    let hoverBoard = null;
+  if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
 
-    if (ray) {
-      // Je nach Phase auf das passende Brett raycasten
-      if (game.phase === PHASE.PLACE_PLAYER && boardPlayer) {
-        hoverBoard = boardPlayer;
-      } else if (game.phase === PHASE.PLAYER_TURN && boardAI) {
-        hoverBoard = boardAI;
+  // XR-Ray bestimmen
+  const ray = getXRRay(frame);
+  if (!ray) {
+    clearHover();
+    renderer.render(scene, camera);
+    return;
+  }
+  updateDebugRay(ray.origin, ray.direction);
+
+  // Beide Bretter intersecten (falls vorhanden)
+  let hitPlayer = null, hitAI = null;
+  if (boardPlayer) { raycaster.set(ray.origin, ray.direction); hitPlayer = raycaster.intersectObject(boardPlayer.pickingPlane, false)[0] || null; }
+  if (boardAI)     { raycaster.set(ray.origin, ray.direction); hitAI     = raycaster.intersectObject(boardAI.pickingPlane, false)[0]     || null; }
+
+  // Zielwahl je Phase (aber Raycast immer auf beide)
+  if (game.phase === PHASE.PLACE_PLAYER) {
+    // Nur Spielerbrett relevant
+    applyHover('player', hitPlayer);
+    pollRotateButtons(frame);
+    // Ghost-Vorschau
+    if (lastHoverCell) {
+      const type = game.player.fleet[game.player.nextShipIndex];
+      if (type) {
+        const cells = boardPlayer.cellsForShip(lastHoverCell, type.length, game.player.orientation);
+        const valid = game.player.board.canPlaceShip(lastHoverCell.i, lastHoverCell.j, type.length, game.player.orientation);
+        boardPlayer.showGhost(cells, valid);
+        setHUD(`Phase: ${game.phase} — Schiff ${game.player.nextShipIndex + 1}/${game.player.fleet.length}: ${type.name} (${type.length}) | Ausrichtung: ${game.player.orientation}${valid ? '' : ' — ungültig'}`);
       }
-
-      if (hoverBoard) {
-        raycaster.set(ray.origin, ray.direction);
-        const hit = raycaster.intersectObject(hoverBoard.pickingPlane, false)[0];
-        if (hit) {
-          const cell = hoverBoard.worldToCell(hit.point);
-          lastHoverCell = cell || null;
-
-          // In PLACE_PLAYER: Ghost (kein Einzel-Highlight)
-          if (game.phase === PHASE.PLACE_PLAYER) {
-            hoverBoard.highlight.visible = false;
-            const type = game.player.fleet[game.player.nextShipIndex];
-            if (type && lastHoverCell) {
-              const cells = hoverBoard.cellsForShip(lastHoverCell, type.length, game.player.orientation);
-              const valid = game.player.board.canPlaceShip(lastHoverCell.i, lastHoverCell.j, type.length, game.player.orientation);
-              boardPlayer.showGhost(cells, valid);
-              setHUD(`Phase: ${game.phase} — Schiff ${game.player.nextShipIndex + 1}/${game.player.fleet.length}: ${type.name} (${type.length}) | Ausrichtung: ${game.player.orientation}${valid ? '' : ' — ungültig'}`);
-            } else {
-              boardPlayer.clearGhost();
-            }
-          }
-          // In PLAYER_TURN: Ziel-Highlight auf Gegner-Brett
-          if (game.phase === PHASE.PLAYER_TURN) {
-            boardAI.setHoverCell(lastHoverCell);
-          }
-
-          debugDot.position.copy(hit.point);
-          debugDot.visible = !!cell;
-        } else {
-          lastHoverCell = null;
-          if (boardPlayer) boardPlayer.clearGhost();
-          if (boardAI) boardAI.setHoverCell(null);
-          debugDot.visible = false;
-        }
-
-        updateDebugRay(ray.origin, ray.direction);
-      } else {
-        // keine Interaktion in anderen Phasen
-        lastHoverCell = null;
-        if (boardPlayer) { boardPlayer.clearGhost(); boardPlayer.setHoverCell(null); }
-        if (boardAI) boardAI.setHoverCell(null);
-        debugDot.visible = false;
-        debugRay.visible = false;
-      }
-
-      // Buttons: Rotation nur in Platzierungsphase
-      if (boardPlayer) pollRotateButtons(frame);
+    } else {
+      boardPlayer.clearGhost();
     }
+  } else if (game.phase === PHASE.PLAYER_TURN) {
+    // Nur Gegnerbrett relevant
+    boardPlayer.clearGhost();
+    applyHover('ai', hitAI);
+  } else {
+    // Andere Phasen: nichts anvisieren
+    clearHover();
+    boardPlayer?.clearGhost();
   }
 
   renderer.render(scene, camera);
+}
+
+function applyHover(target, hit) {
+  lastHoverTarget = null;
+  lastHoverCell = null;
+  // Highlight ausblenden auf beiden
+  if (boardPlayer) boardPlayer.setHoverCell(null);
+  if (boardAI) boardAI.setHoverCell(null);
+
+  if (!hit) { debugDot.visible = false; return; }
+
+  const board = (target === 'player') ? boardPlayer : boardAI;
+  const cell = board?.worldToCell(hit.point) || null;
+  if (cell) {
+    lastHoverTarget = target;
+    lastHoverCell = cell;
+    if (target === 'player') {
+      // In PLACE_PLAYER: kein Einzel-Highlight (Ghost übernimmt)
+      debugDot.position.copy(hit.point); debugDot.visible = true;
+    } else {
+      // In PLAYER_TURN: Gegner-Highlight zeigen
+      boardAI.setHoverCell(cell);
+      debugDot.position.copy(hit.point); debugDot.visible = true;
+    }
+  } else {
+    debugDot.visible = false;
+  }
+}
+
+function clearHover() {
+  lastHoverTarget = null;
+  lastHoverCell = null;
+  boardPlayer?.setHoverCell(null);
+  boardAI?.setHoverCell(null);
+  debugDot.visible = false;
 }
 
 function getXRRay(frame){
@@ -199,20 +208,18 @@ function getXRRay(frame){
 }
 
 function onSelect(){
-  // 1) Beide Boards platzieren (Spieler links, Gegner rechts)
+  // 1) Boards platzieren
   if (!boardPlayer && !boardAI && reticle.visible) {
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
 
-    // Spieler-Brett
     boardPlayer = new Board({ size: 1.0, divisions: 10 });
     boardPlayer.position.copy(basePos);
     boardPlayer.quaternion.copy(baseQuat);
     scene.add(boardPlayer);
 
-    // Gegner-Brett (seitlich versetzt)
     boardAI = new Board({ size: 1.0, divisions: 10 });
-    const offsetLocal = new THREE.Vector3(BOARD_GAP, 0, 0); // +X = rechts
+    const offsetLocal = new THREE.Vector3(BOARD_GAP, 0, 0);
     const offsetWorld = offsetLocal.clone().applyQuaternion(baseQuat);
     boardAI.position.copy(basePos).add(offsetWorld);
     boardAI.quaternion.copy(baseQuat);
@@ -223,11 +230,10 @@ function onSelect(){
     return;
   }
 
-  // 2) Spieler-Schiffe setzen
-  if (boardPlayer && game.phase === PHASE.PLACE_PLAYER && lastHoverCell) {
+  // 2) Spieler-Schiffe setzen (nur wenn wir tatsächlich über dem Spielerbrett stehen)
+  if (boardPlayer && game.phase === PHASE.PLACE_PLAYER && lastHoverCell && lastHoverTarget === 'player') {
     const type = game.player.fleet[game.player.nextShipIndex];
     if (!type) return;
-
     const ok = game.player.board.canPlaceShip(lastHoverCell.i, lastHoverCell.j, type.length, game.player.orientation);
     if (!ok) { setHUD(`Phase: ${game.phase} — Ungültig. Drehe (Y/B) oder andere Zelle.`); return; }
 
@@ -251,37 +257,28 @@ function onSelect(){
     return;
   }
 
-  // 3) Spieler schießt auf das Gegner-Brett
-  if (boardAI && game.phase === PHASE.PLAYER_TURN && lastHoverCell) {
+  // 3) Spielerschuss NUR wenn tatsächlich das Gegnerbrett anvisiert ist
+  if (boardAI && game.phase === PHASE.PLAYER_TURN && lastHoverCell && lastHoverTarget === 'ai') {
     const res = game.playerShoot(lastHoverCell.i, lastHoverCell.j);
     if (!res.ok) {
-      if (res.result === 'repeat') setHUD('Bereits beschossen. Wähle eine andere Zelle.');
+      if (res.result === 'repeat') setHUD('Bereits beschossen. Andere Zelle wählen.');
       else setHUD('Ungültiger Schuss.');
       return;
     }
 
-    // Marker auf Gegner-Brett
     boardAI.addShotMarker(lastHoverCell.i, lastHoverCell.j, res.result === 'hit' || res.result === 'sunk');
-    if (res.result === 'hit') {
-      setHUD(`Treffer bei (${lastHoverCell.i},${lastHoverCell.j})${res.sunk ? ' — Schiff versenkt!' : ''}${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
-    } else if (res.result === 'sunk') {
-      setHUD(`Schiff versenkt bei (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
-    } else if (res.result === 'miss') {
-      setHUD(`Wasser bei (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
-    }
+    if (res.result === 'hit') setHUD(`Treffer (${lastHoverCell.i},${lastHoverCell.j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
+    else if (res.result === 'sunk') setHUD(`Schiff versenkt (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
+    else if (res.result === 'miss') setHUD(`Wasser (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
 
-    // Falls noch nicht vorbei: automatischer KI-Gegenschuss
+    // Automatischer KI-Gegenschuss (falls nicht vorbei)
     if (game.phase === PHASE.AI_TURN && !res.gameOver) {
       const k = game.aiShootRandom();
       if (k && k.ok) {
         boardPlayer.addShotMarker(k.cell.i, k.cell.j, k.result === 'hit' || k.result === 'sunk');
-        if (k.result === 'hit') {
-          setHUD(`KI: Treffer bei (${k.cell.i},${k.cell.j})${k.sunk ? ' — Schiff versenkt!' : ''}${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
-        } else if (k.result === 'sunk') {
-          setHUD(`KI: Schiff versenkt bei (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
-        } else if (k.result === 'miss') {
-          setHUD(`KI: Wasser bei (${k.cell.i},${k.cell.j}). Dein Zug.`);
-        }
+        if (k.result === 'hit') setHUD(`KI: Treffer (${k.cell.i},${k.cell.j})${k.sunk ? ' — versenkt!' : ''}${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
+        else if (k.result === 'sunk') setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
+        else if (k.result === 'miss') setHUD(`KI: Wasser (${k.cell.i},${k.cell.j}). Dein Zug.`);
       }
     }
   }
