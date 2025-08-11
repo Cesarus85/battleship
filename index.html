@@ -73,15 +73,44 @@
     const stateEl = document.getElementById('state');
     const boardInfoEl = document.getElementById('boardInfo');
     const resetBtn = document.getElementById('reset');
+    const uiRoot = document.getElementById('ui');
+
+    // Diagnose/Status-Helfer
+    const statusEl = document.getElementById('status');
+    const log = (msg) => {
+      console.log('[SV-AR]', msg);
+      if (statusEl) statusEl.textContent = String(msg);
+    }; {
+      // Erste Statusmeldung
+      log('SV-STEP-01 • Initialisiere…');
+    }
 
     const sessionInit = {
       requiredFeatures: ['hit-test', 'dom-overlay'],
       optionalFeatures: ['anchors', 'light-estimation', 'depth-sensing'],
-      domOverlay: { root: document.body }
+      domOverlay: { root: uiRoot }
     };
 
-    const arBtn = ARButton.createButton(renderer, sessionInit);
-    document.body.appendChild(arBtn);
+    // Robustere Feature-Erkennung + Fehlerfeedback
+    (async () => {
+      if (!('xr' in navigator)) {
+        log('Kein WebXR verfügbar. Bitte auf einem AR-fähigen Gerät/Browser (z. B. Meta Quest Browser) und via HTTPS öffnen.');
+        return;
+      }
+      try {
+        const supported = await navigator.xr.isSessionSupported('immersive-ar');
+        if (!supported) {
+          log('AR-Session nicht unterstützt. Prüfe Browser/Flags/Gerät.');
+          return;
+        }
+        const arBtn = ARButton.createButton(renderer, sessionInit);
+        document.body.appendChild(arBtn);
+        log('Tippe auf „Enter AR“, richte das Brett aus und platziere es.');
+      } catch (e) {
+        console.error(e);
+        log('Fehler bei der AR-Initialisierung: ' + e.message);
+      }
+    })();
 
     // ----------------------------------------------------------
     // SV-STEP-01: Hit-Test + Retikel + Brettplatzierung
