@@ -1,581 +1,231 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="de">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AR Schiffe-Versenken</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background: #000;
-            color: #fff;
-            font-family: Arial, sans-serif;
-            overflow: hidden;
-        }
-        
-        #ui-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 1000;
-        }
-        
-        #start-button {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            padding: 20px 40px;
-            font-size: 18px;
-            background: #0066cc;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            pointer-events: auto;
-            z-index: 1001;
-        }
-        
-        #start-button:hover {
-            background: #0052a3;
-        }
-        
-        #info-panel {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 15px;
-            border-radius: 10px;
-            pointer-events: auto;
-            display: none;
-        }
-        
-        #status {
-            margin-bottom: 10px;
-            font-weight: bold;
-        }
-        
-        #controls {
-            font-size: 14px;
-            line-height: 1.4;
-        }
-        
-        #fallback {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            display: none;
-        }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Schiffe-Versenken AR – SV-STEP-00/01</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+    #ui { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 14px; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial, sans-serif; background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.55) 30%, rgba(0,0,0,.8) 100%); pointer-events: none; }
+    #ui .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); pointer-events: auto; }
+    button.chip { cursor: pointer; }
+    #status { opacity: .9; }
+    #legend { font-size: 12px; opacity: .9; }
+    #legend span { opacity: .8; }
+  </style>
 </head>
 <body>
-    <div id="ui-overlay">
-        <button id="start-button">AR Spiel starten</button>
-        
-        <div id="info-panel">
-            <div id="status">Bereit zum Spielen</div>
-            <div id="controls">
-                • Zielen Sie mit dem Controller auf ein Feld<br>
-                • Trigger drücken um zu schießen<br>
-                • ESC zum Beenden
-            </div>
-        </div>
-        
-        <div id="fallback">
-            <h2>WebXR nicht unterstützt</h2>
-            <p>Ihr Gerät unterstützt kein WebXR AR.<br>
-            Das Spiel läuft im 3D-Modus.</p>
-        </div>
+  <div id="ui">
+    <div class="row">
+      <div id="status" class="chip">SV-STEP-01 • Richte das Spielbrett auf einer ebenen Fläche aus (weißer Ring) und tippe, um zu platzieren.</div>
+      <button id="reset" class="chip" title="Brett neu platzieren">Brett zurücksetzen</button>
     </div>
+    <div id="legend" class="row" style="margin-top:8px">
+      <div class="chip">State: <strong id="state">INIT</strong></div>
+      <div class="chip">Board: <span id="boardInfo">–</span></div>
+    </div>
+  </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script>
-        class ARBattleshipGame {
-            constructor() {
-                this.scene = null;
-                this.camera = null;
-                this.renderer = null;
-                this.xrSession = null;
-                this.isARSupported = false;
-                this.gameGrid = [];
-                this.gridObjects = [];
-                this.gameState = 'menu';
-                
-                // VR Controllers
-                this.controller1 = null;
-                this.controller2 = null;
-                
-                // Game constants
-                this.GRID_SIZE = 10;
-                this.CELL_SIZE = 0.08;
-                this.GRID_SPACING = 0.01;
-                
-                this.init();
-            }
-            
-            async init() {
-                this.checkARSupport();
-                this.setupScene();
-                this.setupEventListeners();
-            }
-            
-            async checkARSupport() {
-                if ('xr' in navigator) {
-                    try {
-                        this.isARSupported = await navigator.xr.isSessionSupported('immersive-ar');
-                        console.log('AR Support:', this.isARSupported);
-                    } catch (e) {
-                        console.log('XR Check Error:', e);
-                        this.isARSupported = false;
-                    }
-                } else {
-                    console.log('WebXR not available');
-                }
-                
-                if (!this.isARSupported) {
-                    document.getElementById('fallback').style.display = 'block';
-                    setTimeout(() => {
-                        document.getElementById('fallback').style.display = 'none';
-                        this.startGame(false);
-                    }, 3000);
-                }
-            }
-            
-            setupScene() {
-                // Scene setup
-                this.scene = new THREE.Scene();
-                
-                // Camera setup
-                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-                this.camera.position.set(0, 1, 1);
-                this.camera.lookAt(0, 0, 0);
-                
-                // Renderer setup
-                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
-                this.renderer.xr.enabled = true;
-                document.body.appendChild(this.renderer.domElement);
-                
-                // Lighting
-                const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
-                this.scene.add(ambientLight);
-                
-                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                directionalLight.position.set(1, 1, 1);
-                this.scene.add(directionalLight);
-                
-                // Initialize game grid data
-                this.initGameGrid();
-            }
-            
-            initGameGrid() {
-                this.gameGrid = [];
-                for (let row = 0; row < this.GRID_SIZE; row++) {
-                    this.gameGrid[row] = [];
-                    for (let col = 0; col < this.GRID_SIZE; col++) {
-                        this.gameGrid[row][col] = {
-                            hit: false,
-                            hasShip: Math.random() < 0.15, // 15% Chance für ein Schiff
-                            revealed: false
-                        };
-                    }
-                }
-            }
-            
-            setupControllers() {
-                console.log('Setting up VR controllers...');
-                
-                // Controller 1 (usually right hand)
-                this.controller1 = this.renderer.xr.getController(0);
-                this.controller1.addEventListener('selectstart', () => this.onControllerTrigger(0));
-                this.scene.add(this.controller1);
-                
-                // Add visible line for controller 1
-                const geometry1 = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(0, 0, 0),
-                    new THREE.Vector3(0, 0, -2)
-                ]);
-                const material1 = new THREE.LineBasicMaterial({ color: 0xff0000 });
-                const line1 = new THREE.Line(geometry1, material1);
-                line1.name = 'line';
-                this.controller1.add(line1);
-                
-                // Controller 2 (usually left hand)
-                this.controller2 = this.renderer.xr.getController(1);
-                this.controller2.addEventListener('selectstart', () => this.onControllerTrigger(1));
-                this.scene.add(this.controller2);
-                
-                // Add visible line for controller 2
-                const geometry2 = new THREE.BufferGeometry().setFromPoints([
-                    new THREE.Vector3(0, 0, 0),
-                    new THREE.Vector3(0, 0, -2)
-                ]);
-                const material2 = new THREE.LineBasicMaterial({ color: 0x0000ff });
-                const line2 = new THREE.Line(geometry2, material2);
-                line2.name = 'line';
-                this.controller2.add(line2);
-                
-                console.log('Controllers setup complete');
-            }
-            
-            onControllerTrigger(controllerIndex) {
-                console.log(`Controller ${controllerIndex} trigger pressed`);
-                
-                if (this.gameState !== 'playing') {
-                    console.log('Game not in playing state');
-                    return;
-                }
-                
-                const controller = controllerIndex === 0 ? this.controller1 : this.controller2;
-                
-                // Create raycaster from controller
-                const tempMatrix = new THREE.Matrix4();
-                tempMatrix.identity().extractRotation(controller.matrixWorld);
-                
-                const raycaster = new THREE.Raycaster();
-                raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                
-                // Check intersections with grid cells
-                const cellMeshes = this.gridObjects.filter(obj => obj.userData && obj.userData.type === 'gridCell');
-                const intersects = raycaster.intersectObjects(cellMeshes);
-                
-                console.log(`Found ${intersects.length} intersections`);
-                
-                if (intersects.length > 0) {
-                    const cell = intersects[0].object;
-                    console.log('Hit cell:', cell.userData.row, cell.userData.col);
-                    this.makeMove(cell.userData.row, cell.userData.col, cell);
-                } else {
-                    console.log('No cell hit');
-                    this.updateStatus('Kein Feld getroffen - versuchen Sie es erneut');
-                }
-            }
-            
-            createGameGrid() {
-                // Remove existing grid
-                this.gridObjects.forEach(obj => this.scene.remove(obj));
-                this.gridObjects = [];
-                
-                const gridGroup = new THREE.Group();
-                
-                for (let row = 0; row < this.GRID_SIZE; row++) {
-                    for (let col = 0; col < this.GRID_SIZE; col++) {
-                        // Cell geometry
-                        const cellGeometry = new THREE.BoxGeometry(this.CELL_SIZE, 0.01, this.CELL_SIZE);
-                        const cellMaterial = new THREE.MeshLambertMaterial({ 
-                            color: 0x0066cc,
-                            transparent: true,
-                            opacity: 0.7
-                        });
-                        
-                        const cell = new THREE.Mesh(cellGeometry, cellMaterial);
-                        
-                        // Position cell
-                        const x = (col - this.GRID_SIZE / 2) * (this.CELL_SIZE + this.GRID_SPACING);
-                        const z = (row - this.GRID_SIZE / 2) * (this.CELL_SIZE + this.GRID_SPACING);
-                        cell.position.set(x, 0, z);
-                        
-                        // Add user data for interaction
-                        cell.userData = { row, col, type: 'gridCell' };
-                        
-                        gridGroup.add(cell);
-                        this.gridObjects.push(cell);
-                    }
-                }
-                
-                // Position the grid
-                if (this.xrSession) {
-                    // AR Mode: Grid auf Augenhöhe
-                    gridGroup.position.set(0, 0.1, -0.8);
-                    gridGroup.scale.set(1.5, 1, 1.5);
-                } else {
-                    // 3D Mode
-                    gridGroup.position.set(0, 0, -2);
-                    gridGroup.rotation.x = -0.2;
-                }
-                
-                this.scene.add(gridGroup);
-                this.gridGroup = gridGroup;
-                
-                console.log('Game grid created');
-            }
-            
-            setupEventListeners() {
-                document.getElementById('start-button').addEventListener('click', () => {
-                    this.startGame(this.isARSupported);
-                });
-                
-                // Resize handler
-                window.addEventListener('resize', () => {
-                    this.camera.aspect = window.innerWidth / window.innerHeight;
-                    this.camera.updateProjectionMatrix();
-                    this.renderer.setSize(window.innerWidth, window.innerHeight);
-                });
-                
-                // Keyboard controls
-                document.addEventListener('keydown', (event) => {
-                    if (event.code === 'Escape' && this.xrSession) {
-                        this.xrSession.end();
-                    }
-                });
-            }
-            
-            async startGame(useAR = false) {
-                document.getElementById('start-button').style.display = 'none';
-                document.getElementById('info-panel').style.display = 'block';
-                
-                if (useAR) {
-                    try {
-                        console.log('Requesting AR session...');
-                        
-                        this.xrSession = await navigator.xr.requestSession('immersive-ar', {
-                            optionalFeatures: ['local', 'local-floor', 'bounded-floor']
-                        });
-                        
-                        console.log('AR session created');
-                        
-                        await this.renderer.xr.setSession(this.xrSession);
-                        
-                        // Setup controllers AFTER session is active
-                        this.setupControllers();
-                        
-                        this.xrSession.addEventListener('end', () => {
-                            console.log('AR session ended');
-                            this.xrSession = null;
-                            if (this.controller1) this.scene.remove(this.controller1);
-                            if (this.controller2) this.scene.remove(this.controller2);
-                            this.controller1 = null;
-                            this.controller2 = null;
-                            document.getElementById('start-button').style.display = 'block';
-                            document.getElementById('info-panel').style.display = 'none';
-                            this.gameState = 'menu';
-                        });
-                        
-                        setTimeout(() => {
-                            this.createGameGrid();
-                            this.gameState = 'playing';
-                            this.updateStatus('AR bereit - Zielen und Trigger drücken');
-                        }, 500);
-                        
-                    } catch (error) {
-                        console.error('AR Session Error:', error);
-                        this.fallbackTo3D();
-                    }
-                } else {
-                    this.fallbackTo3D();
-                }
-                
-                this.startRenderLoop();
-            }
-            
-            fallbackTo3D() {
-                this.createGameGrid();
-                this.gameState = 'playing';
-                this.updateStatus('3D Modus - Bewegen Sie die Maus um zu schauen');
-                
-                // Simple mouse controls for 3D mode
-                let mouseX = 0, mouseY = 0;
-                let isMouseDown = false;
-                
-                document.addEventListener('mousedown', () => isMouseDown = true);
-                document.addEventListener('mouseup', () => isMouseDown = false);
-                document.addEventListener('mousemove', (event) => {
-                    if (isMouseDown) {
-                        mouseX += event.movementX * 0.01;
-                        mouseY += event.movementY * 0.01;
-                        
-                        this.camera.position.x = Math.sin(mouseX) * 3;
-                        this.camera.position.z = Math.cos(mouseX) * 3;
-                        this.camera.position.y = Math.max(0.5, 2 + mouseY);
-                        this.camera.lookAt(0, 0, 0);
-                    }
-                });
-                
-                // Click to shoot in 3D mode
-                this.renderer.domElement.addEventListener('click', (event) => {
-                    if (this.gameState !== 'playing') return;
-                    
-                    const rect = this.renderer.domElement.getBoundingClientRect();
-                    const mouse = new THREE.Vector2();
-                    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-                    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-                    
-                    const raycaster = new THREE.Raycaster();
-                    raycaster.setFromCamera(mouse, this.camera);
-                    
-                    const cellMeshes = this.gridObjects.filter(obj => obj.userData && obj.userData.type === 'gridCell');
-                    const intersects = raycaster.intersectObjects(cellMeshes);
-                    
-                    if (intersects.length > 0) {
-                        const cell = intersects[0].object;
-                        this.makeMove(cell.userData.row, cell.userData.col, cell);
-                    }
-                });
-            }
-            
-            makeMove(row, col, cellObject) {
-                const cell = this.gameGrid[row][col];
-                
-                if (cell.revealed) {
-                    this.updateStatus('Dieses Feld wurde bereits beschossen!');
-                    return;
-                }
-                
-                console.log('Making move on:', row, col, 'hasShip:', cell.hasShip);
-                
-                cell.revealed = true;
-                
-                if (cell.hasShip) {
-                    // Hit!
-                    cell.hit = true;
-                    cellObject.material.color.setHex(0xff4444);
-                    cellObject.material.opacity = 1;
-                    this.updateStatus('🎯 TREFFER!');
-                    
-                    // Create hit effect
-                    this.createHitEffect(cellObject.position);
-                } else {
-                    // Miss
-                    cellObject.material.color.setHex(0x444444);
-                    cellObject.material.opacity = 0.8;
-                    this.updateStatus('💦 Verfehlt!');
-                    
-                    // Create miss effect
-                    this.createMissEffect(cellObject.position);
-                }
-                
-                // Simple AI move after delay
-                setTimeout(() => {
-                    this.makeAIMove();
-                }, 1500);
-            }
-            
-            makeAIMove() {
-                let attempts = 0;
-                let row, col;
-                
-                do {
-                    row = Math.floor(Math.random() * this.GRID_SIZE);
-                    col = Math.floor(Math.random() * this.GRID_SIZE);
-                    attempts++;
-                } while (this.gameGrid[row][col].revealed && attempts < 100);
-                
-                if (attempts < 100) {
-                    const cellIndex = row * this.GRID_SIZE + col;
-                    if (this.gridObjects[cellIndex]) {
-                        setTimeout(() => {
-                            this.makeMove(row, col, this.gridObjects[cellIndex]);
-                        }, 500);
-                    }
-                }
-            }
-            
-            createHitEffect(position) {
-                const particles = new THREE.Group();
-                
-                for (let i = 0; i < 10; i++) {
-                    const particleGeometry = new THREE.SphereGeometry(0.005);
-                    const particleMaterial = new THREE.MeshBasicMaterial({ 
-                        color: 0xff4444 + Math.random() * 0x444444 
-                    });
-                    const particle = new THREE.Mesh(particleGeometry, particleMaterial);
-                    
-                    particle.position.copy(position);
-                    particle.position.y += 0.02;
-                    
-                    particle.velocity = new THREE.Vector3(
-                        (Math.random() - 0.5) * 0.1,
-                        Math.random() * 0.1,
-                        (Math.random() - 0.5) * 0.1
-                    );
-                    
-                    particles.add(particle);
-                }
-                
-                this.scene.add(particles);
-                
-                let time = 0;
-                const animate = () => {
-                    time += 0.016;
-                    particles.children.forEach(particle => {
-                        particle.position.add(particle.velocity);
-                        particle.velocity.y -= 0.005;
-                        particle.material.opacity = Math.max(0, 1 - time * 2);
-                    });
-                    
-                    if (time < 1) {
-                        requestAnimationFrame(animate);
-                    } else {
-                        this.scene.remove(particles);
-                    }
-                };
-                animate();
-            }
-            
-            createMissEffect(position) {
-                const splash = new THREE.Group();
-                
-                for (let i = 0; i < 6; i++) {
-                    const dropGeometry = new THREE.SphereGeometry(0.003);
-                    const dropMaterial = new THREE.MeshBasicMaterial({ color: 0x4444ff });
-                    const drop = new THREE.Mesh(dropGeometry, dropMaterial);
-                    
-                    drop.position.copy(position);
-                    drop.position.y += 0.01;
-                    
-                    const angle = (i / 6) * Math.PI * 2;
-                    drop.velocity = new THREE.Vector3(
-                        Math.cos(angle) * 0.05,
-                        0.03,
-                        Math.sin(angle) * 0.05
-                    );
-                    
-                    splash.add(drop);
-                }
-                
-                this.scene.add(splash);
-                
-                let time = 0;
-                const animate = () => {
-                    time += 0.016;
-                    splash.children.forEach(drop => {
-                        drop.position.add(drop.velocity);
-                        drop.velocity.y -= 0.003;
-                        drop.material.opacity = Math.max(0, 1 - time * 3);
-                    });
-                    
-                    if (time < 0.8) {
-                        requestAnimationFrame(animate);
-                    } else {
-                        this.scene.remove(splash);
-                    }
-                };
-                animate();
-            }
-            
-            updateStatus(message) {
-                document.getElementById('status').textContent = message;
-            }
-            
-            startRenderLoop() {
-                this.renderer.setAnimationLoop(() => {
-                    this.renderer.render(this.scene, this.camera);
-                });
-            }
+  <script type="module">
+    /*
+      ==========================================================
+      Schiffe-Versenken AR – Prototype
+      SV-STEP-00: Projekt-Scaffold (Three.js + WebXR-AR + UI)
+      SV-STEP-01: AR-HitTest + Brettplatzierung (10×10 Grid, ~60 cm)
+      ==========================================================
+
+      Dateistruktur (v1 – single file). Später splitten wir in:
+        /src/main.js      – Bootstrapping & Renderloop
+        /src/ar.js        – Hit-Test, Anker (optional), Retikel
+        /src/board.js     – Grid/Koordinaten, Zellen, visuelles Feedback
+        /src/game.js      – Zustandsmaschine
+        /src/ai.js        – Gegner-Logik
+        /src/ui.js        – HTML-Overlay
+
+      Test-Kriterien (SV-STEP-01):
+        [ ] AR-Session startet mit Passthrough
+        [ ] Weißer Retikel-Ring folgt erkannten Flächen
+        [ ] Tipp auf Controller/Tap platziert ein 10×10-Grid (~0,6 m)
+        [ ] Grid bleibt stabil im Raum, Retikel verschwindet
+        [ ] "Brett zurücksetzen" erlaubt Neuplatzierung
+    */
+
+    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+    import { ARButton } from 'https://unpkg.com/three@0.160.0/examples/jsm/webxr/ARButton.js';
+
+    // ----------------------------------------------------------
+    // SV-STEP-00: Grund-Setup
+    // ----------------------------------------------------------
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x222244, 1.0);
+    scene.add(hemi);
+
+    // UI
+    const stateEl = document.getElementById('state');
+    const boardInfoEl = document.getElementById('boardInfo');
+    const resetBtn = document.getElementById('reset');
+
+    const sessionInit = {
+      requiredFeatures: ['hit-test', 'dom-overlay'],
+      optionalFeatures: ['anchors', 'light-estimation', 'depth-sensing'],
+      domOverlay: { root: document.body }
+    };
+
+    const arBtn = ARButton.createButton(renderer, sessionInit);
+    document.body.appendChild(arBtn);
+
+    // ----------------------------------------------------------
+    // SV-STEP-01: Hit-Test + Retikel + Brettplatzierung
+    // ----------------------------------------------------------
+    const cellSize = 0.06; // 6 cm pro Feld
+    const gridSize = 10;   // 10×10
+    const boardSize = cellSize * gridSize; // ca. 0,6 m
+
+    // Retikel (weißer Ring)
+    const reticle = new THREE.Mesh(
+      new THREE.RingGeometry(0.07, 0.075, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 })
+    );
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    // Controller (für "select"-Events in AR)
+    const controller = renderer.xr.getController(0);
+    scene.add(controller);
+
+    // Board-Gruppe (Grid + Bodenplatte leicht transparent)
+    const boardGroup = new THREE.Group();
+    boardGroup.visible = false;
+    scene.add(boardGroup);
+
+    // Bodenplatte
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(boardSize, boardSize),
+      new THREE.MeshBasicMaterial({ color: 0x0a2a3a, transparent: true, opacity: 0.15 })
+    );
+    plate.rotation.x = -Math.PI / 2;
+    boardGroup.add(plate);
+
+    // Linien-Grid
+    const gridHelper = new THREE.GridHelper(boardSize, gridSize, 0x66ccff, 0x66ccff);
+    (gridHelper.material).opacity = 0.9;
+    (gridHelper.material).transparent = true;
+    gridHelper.position.y = 0.001; // Z-Fighting vermeiden
+    boardGroup.add(gridHelper);
+
+    // Zell-Nummern (A–J / 1–10)
+    const labelsGroup = new THREE.Group();
+    labelsGroup.position.set(-boardSize/2, 0.002, -boardSize/2);
+    boardGroup.add(labelsGroup);
+
+    const charA = 'A'.charCodeAt(0);
+    const makeText = (text, size=0.015) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = 256; canvas.height = 128;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '48px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, canvas.width/2, canvas.height/2);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.minFilter = THREE.LinearFilter;
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.85 });
+      const spr = new THREE.Sprite(mat);
+      spr.scale.set(size*3, size, 1);
+      return spr;
+    };
+
+    for (let i = 0; i < gridSize; i++) {
+      const letter = String.fromCharCode(charA + i);
+      const s = makeText(letter);
+      s.position.set((i + 0.5) * cellSize, 0, -0.015);
+      labelsGroup.add(s);
+    }
+    for (let j = 0; j < gridSize; j++) {
+      const num = makeText(String(j + 1));
+      num.position.set(-0.015, 0, (j + 0.5) * cellSize);
+      labelsGroup.add(num);
+    }
+
+    // Hit-Test Variablen
+    let xrSession = null;
+    let refSpace = null;
+    let viewerSpace = null;
+    let hitTestSource = null;
+    let boardPlaced = false;
+
+    // Session Events
+    renderer.xr.addEventListener('sessionstart', async () => {
+      xrSession = renderer.xr.getSession();
+      refSpace = renderer.xr.getReferenceSpace();
+      viewerSpace = await xrSession.requestReferenceSpace('viewer');
+      hitTestSource = await xrSession.requestHitTestSource({ space: viewerSpace });
+      stateEl.textContent = 'PLACE_BOARD';
+    });
+
+    renderer.xr.addEventListener('sessionend', () => {
+      xrSession = null; refSpace = null; viewerSpace = null; hitTestSource = null;
+      boardPlaced = false; reticle.visible = false; boardGroup.visible = false;
+      stateEl.textContent = 'INIT';
+      boardInfoEl.textContent = '–';
+    });
+
+    // Platzierung per Select/Tap
+    controller.addEventListener('select', () => {
+      if (!boardPlaced && reticle.visible) {
+        boardGroup.matrix.copy(reticle.matrix);
+        boardGroup.matrix.decompose(boardGroup.position, boardGroup.quaternion, boardGroup.scale);
+        boardGroup.visible = true;
+        boardPlaced = true;
+        reticle.visible = false;
+        stateEl.textContent = 'BOARD_PLACED';
+        boardInfoEl.textContent = `${gridSize}×${gridSize} @ ${(cellSize*100).toFixed(0)}mm`; 
+      }
+    });
+
+    // Reset
+    resetBtn.addEventListener('click', () => {
+      boardPlaced = false; boardGroup.visible = false; reticle.visible = true; stateEl.textContent = 'PLACE_BOARD';
+    });
+
+    // Renderloop mit Hit-Test
+    renderer.setAnimationLoop((t, frame) => {
+      if (frame && hitTestSource && !boardPlaced) {
+        const results = frame.getHitTestResults(hitTestSource);
+        if (results.length) {
+          const hit = results[0];
+          const pose = hit.getPose(refSpace);
+          if (pose) {
+            reticle.visible = true;
+            reticle.matrix.fromArray(pose.transform.matrix);
+          }
+        } else {
+          reticle.visible = false;
         }
-        
-        // Initialize the game when page loads
-        window.addEventListener('load', () => {
-            new ARBattleshipGame();
-        });
-    </script>
+      }
+      renderer.render(scene, camera);
+    });
+
+    // Resize
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // (Optional) Debug am Desktop: Kamerabewegung blocken
+    document.addEventListener('gesturestart', e => e.preventDefault());
+  </script>
 </body>
 </html>
