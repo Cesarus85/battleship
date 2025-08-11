@@ -1,4 +1,4 @@
-// [BATTLESHIP_AR:STEP 4] Echte Spieler-Platzierung: Ghost, Rotate (Y/B), Place (Trigger)
+// [BATTLESHIP_AR:STEP 5] KI-Flotte platzieren + KI-Schüsse (Test via A-Taste)
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
@@ -19,8 +19,8 @@ let debugRay = null;
 let debugDot = null;
 
 // Button-Edge-Detection
-const prevButtons = new Map(); // controller -> prev pressed bitmask
-const BTN = { A: 0, B: 1, X: 2, Y: 3 }; // typische Indizes; Quest: rechts A/B, links X/Y
+const prevButtons = new Map();
+const BTN = { A: 0, B: 1, X: 2, Y: 3 };
 
 init();
 animate();
@@ -149,28 +149,8 @@ function render(_, frame) {
       debugDot.visible = false;
     }
 
-    // --- Schritt 4: Ghost-Vorschau + Rotate-Input ---
-    if (game.phase === PHASE.PLACE_PLAYER) {
-      // 1) Rotate per Y/B (Edge)
-      pollRotateButtons(frame);
-
-      // 2) Ghost zeigen (falls Hover)
-      if (lastHoverCell) {
-        const type = game.player.fleet[game.player.nextShipIndex];
-        if (type) {
-          const cells = board.cellsForShip(lastHoverCell, type.length, game.player.orientation);
-          // Prüfen gegen Modell (Bounds/Kollision)
-          const valid = game.player.board.canPlaceShip(lastHoverCell.i, lastHoverCell.j, type.length, game.player.orientation);
-          board.showGhost(cells, valid);
-          setHUD(`Phase: ${game.phase} — Schiff ${game.player.nextShipIndex + 1}/${game.player.fleet.length}: ${type.name} (${type.length}) | Ausrichtung: ${game.player.orientation}${valid ? '' : ' — ungültig'}`);
-        }
-      } else {
-        board.clearGhost();
-      }
-    } else {
-      // außerhalb Platzierungsphase kein Ghost
-      board.clearGhost();
-    }
+    // Poll Buttons für Testfunktionen in Step 5
+    pollButtonsForStep5(frame);
   }
 
   renderer.render(scene, camera);
@@ -200,9 +180,9 @@ function getXRRay(frame) {
   return { origin, direction, controller: null };
 }
 
-// Platzieren / Test-Toggle
+// Platzieren / Interaktion
 function onSelect() {
-  // 1) Board visuell platzieren
+  // 1) Brett platzieren
   if (!board && reticle.visible) {
     board = new Board({ size: 1.0, divisions: 10 });
     board.position.copy(reticle.position);
@@ -210,31 +190,32 @@ function onSelect() {
     scene.add(board);
 
     game.beginPlacement();
-    setHUD(`Phase: ${game.phase} — Platziere deine Schiffe. Y/B: drehen, Trigger: setzen.`);
+    setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
     return;
   }
 
-  // 2) Spieler-Schiff platzieren (echte Logik in Step 4)
+  // 2) Spieler-Schiff setzen (aus Schritt 4)
   if (board && lastHoverCell && game.phase === PHASE.PLACE_PLAYER) {
     const type = game.player.fleet[game.player.nextShipIndex];
     if (!type) return;
 
     const ok = game.player.board.canPlaceShip(lastHoverCell.i, lastHoverCell.j, type.length, game.player.orientation);
-    if (!ok) {
-      setHUD(`Phase: ${game.phase} — Position ungültig. Drehe (Y/B) oder wähle andere Zelle.`);
-      return;
-    }
+    if (!ok) { setHUD(`Phase: ${game.phase} — Ungültig. Drehe (Y/B) oder andere Zelle.`); return; }
 
     const res = game.tryPlaceNextPlayerShip(lastHoverCell.i, lastHoverCell.j);
     if (res.ok) {
-      // Visuals setzen
-      const cells = board.cellsForShip(lastHoverCell, type.length, res.shipType ? game.player.orientation : game.player.orientation);
+      const cells = board.cellsForShip(lastHoverCell, type.length, game.player.orientation);
       board.placeShipVisual(cells);
       board.clearGhost();
 
       if (res.placedAll) {
-        game.aiPlaceFleetRandomStub(); // Schritt 5: echte Platzierung
-        setHUD(`Phase: ${game.phase} — (KI platziert als Nächstes; folgt in Schritt 5)`);
+        // --- NEU: KI platziert Flotte ---
+        const ar = game.aiPlaceFleetRandom();
+        if (!ar.ok) {
+          setHUD(`Fehler bei KI-Platzierung: ${ar.reason}`);
+          return;
+        }
+        setHUD(`Phase: ${game.phase} — Deine Runde. (Schießen implementieren wir in Schritt 6) — Drücke A für einen KI-Testschuss.`);
       } else {
         const next = game.player.fleet[game.player.nextShipIndex];
         setHUD(`Phase: ${game.phase} — Nächstes Schiff: ${next.name} (${next.length}) | Ausrichtung: ${game.player.orientation}`);
@@ -244,34 +225,46 @@ function onSelect() {
     }
     return;
   }
-
-  // 3) Andere Phasen: Test-Toggle beibehalten (optional)
-  if (board && lastHoverCell) {
-    const added = board.toggleMarker(lastHoverCell);
-    setHUD(`Phase: ${game.phase} — ${added ? 'Markiert' : 'Entfernt'}: (${lastHoverCell.i},${lastHoverCell.j})`);
-  }
 }
 
-// Y/B erkennen (Edge): Dreht h<->v
-function pollRotateButtons(frame) {
+// Buttons auslesen: Y/B (drehen) in PLACE_PLAYER, A (KI-Testschuss) in PLAYER_TURN
+function pollButtonsForStep5(frame) {
   for (const c of controllers) {
     const src = c.userData.inputSource;
     const gp = src?.gamepad;
     if (!gp) continue;
 
-    // pressed bitmask bilden
     let mask = 0;
-    gp.buttons.forEach((b, idx) => {
-      if (b?.pressed) mask |= (1 << idx);
-    });
+    gp.buttons.forEach((b, idx) => { if (b?.pressed) mask |= (1 << idx); });
 
     const prev = prevButtons.get(c) ?? 0;
-    const justPressedY = ((mask & (1 << BTN.Y)) && !(prev & (1 << BTN.Y)));
-    const justPressedB = ((mask & (1 << BTN.B)) && !(prev & (1 << BTN.B)));
+    const justA = ((mask & (1 << BTN.A)) && !(prev & (1 << BTN.A)));
+    const justB = ((mask & (1 << BTN.B)) && !(prev & (1 << BTN.B)));
+    const justY = ((mask & (1 << BTN.Y)) && !(prev & (1 << BTN.Y)));
 
-    if (justPressedY || justPressedB) {
-      const ori = game.toggleOrientation();
-      setHUD(`Phase: ${game.phase} — Ausrichtung gewechselt: ${ori}`);
+    // Drehen nur in der Platzierungsphase
+    if (game.phase === PHASE.PLACE_PLAYER && (justB || justY)) {
+      setHUD(`Phase: ${game.phase} — Ausrichtung: ${game.toggleOrientation()}`);
+    }
+
+    // KI-Testschuss sobald Spiel in PLAYER_TURN
+    if (game.phase === PHASE.PLAYER_TURN && justA) {
+      game.phase = PHASE.AI_TURN; // explizit wechseln
+      const r = game.aiShootRandom();
+      if (r && r.ok) {
+        board.addShotMarker(r.cell.i, r.cell.j, r.result === 'hit' || r.result === 'sunk');
+        if (r.result === 'hit') {
+          setHUD(`KI schießt: Treffer bei (${r.cell.i},${r.cell.j})${r.sunk ? ' — Schiff versenkt!' : ''}${r.gameOver ? ' — GAME OVER (KI gewinnt)' : ''}`);
+        } else if (r.result === 'sunk') {
+          setHUD(`KI schießt: Schiff versenkt bei (${r.cell.i},${r.cell.j})${r.gameOver ? ' — GAME OVER (KI gewinnt)' : ''}`);
+        } else if (r.result === 'miss') {
+          setHUD(`KI schießt: Wasser bei (${r.cell.i},${r.cell.j}). Dein Zug (Schießen folgt in Schritt 6).`);
+        } else if (r.result === 'repeat') {
+          setHUD(`KI versuchte Wiederholung — erneut A drücken.`);
+        }
+      } else {
+        setHUD(r?.reason ? `KI-Schuss fehlgeschlagen: ${r.reason}` : 'KI-Schuss fehlgeschlagen.');
+      }
     }
 
     prevButtons.set(c, mask);

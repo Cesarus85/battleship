@@ -1,5 +1,5 @@
-// [BATTLESHIP_AR:STEP 3] State Machine & GameState
-import { BoardModel, DEFAULT_FLEET } from './model.js';
+// [BATTLESHIP_AR:STEP 5] State: KI-Platzierung & KI-Schüsse
+import { BoardModel, DEFAULT_FLEET, CELL } from './model.js';
 
 export const PHASE = {
   INIT: 'INIT',
@@ -16,10 +16,9 @@ export class GameState {
 
     this.player = {
       board: new BoardModel(10),
-      // geplante Schiffsliste für Platzierung
       fleet: expandFleet(DEFAULT_FLEET),
       nextShipIndex: 0,
-      orientation: 'h', // 'h' oder 'v'
+      orientation: 'h',
     };
 
     this.ai = {
@@ -27,21 +26,18 @@ export class GameState {
       fleet: expandFleet(DEFAULT_FLEET),
     };
 
-    this.winner = null; // 'player' | 'ai'
+    this.winner = null;
   }
 
-  // Aufruf, nachdem das physische AR-Board platziert wurde
   beginPlacement() {
     this.phase = PHASE.PLACE_PLAYER;
   }
 
-  // Wechselt die Orientierung für das nächste zu platzierende Schiff
   toggleOrientation() {
     this.player.orientation = this.player.orientation === 'h' ? 'v' : 'h';
     return this.player.orientation;
   }
 
-  // Noch keine visuelle Platzierung – reine Logik (Schritt 4 nutzt das)
   tryPlaceNextPlayerShip(i, j) {
     if (this.phase !== PHASE.PLACE_PLAYER) return { ok: false, reason: 'wrong_phase' };
     const shipType = this.player.fleet[this.player.nextShipIndex];
@@ -57,38 +53,60 @@ export class GameState {
     return { ok: true, shipType, placedAll: this.phase === PHASE.PLACE_AI };
   }
 
-  // KI-Platzierung (kommt in Schritt 5 „richtig“ – hier nur Stub/Platzhalter)
-  aiPlaceFleetRandomStub() {
-    // Wir schieben das auf Schritt 5 – hier nur Phase weiterschalten.
+  // --- NEU in Step 5: KI zufällig platzieren ---
+  aiPlaceFleetRandom() {
+    if (this.phase !== PHASE.PLACE_AI) return { ok: false, reason: 'wrong_phase' };
+    for (const type of this.ai.fleet) {
+      let placed = false;
+      let safety = 0;
+      while (!placed && safety++ < 500) {
+        const dir = Math.random() < 0.5 ? 'h' : 'v';
+        const maxI = dir === 'h' ? this.ai.board.size - type.length : this.ai.board.size - 1;
+        const maxJ = dir === 'v' ? this.ai.board.size - type.length : this.ai.board.size - 1;
+        const i = Math.floor(Math.random() * (maxI + 1));
+        const j = Math.floor(Math.random() * (maxJ + 1));
+        placed = this.ai.board.placeShip(type, i, j, dir);
+      }
+      if (!placed) return { ok: false, reason: 'placement_failed' };
+    }
     this.phase = PHASE.PLAYER_TURN;
+    return { ok: true };
   }
 
-  // Spieler schießt auf KI-Board (Logik vorhanden – UI ab Schritt 6)
-  playerShoot(i, j) {
-    if (this.phase !== PHASE.PLAYER_TURN) return { ok: false, reason: 'wrong_phase' };
-    const res = this.ai.board.shoot(i, j);
-    if (!res.ok) return res;
+  // --- NEU in Step 5: KI schießt zufällig (keine Wiederholung) ---
+  aiShootRandom() {
+    if (this.phase !== PHASE.AI_TURN && this.phase !== PHASE.PLAYER_TURN) {
+      return { ok: false, reason: 'wrong_phase' };
+    }
+
+    // Ziel: eine unbeschossene Zelle auf dem Spieler-Board finden
+    const candidates = [];
+    for (let j = 0; j < this.player.board.size; j++) {
+      for (let i = 0; i < this.player.board.size; i++) {
+        const c = this.player.board.grid[j][i];
+        if (c !== CELL.Hit && c !== CELL.Miss) candidates.push({ i, j });
+      }
+    }
+    if (candidates.length === 0) {
+      this.phase = PHASE.GAME_OVER;
+      this.winner = 'ai';
+      return { ok: false, reason: 'no_targets' };
+    }
+
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    const res = this.player.board.shoot(pick.i, pick.j); // nutzt Model-Logik
 
     if (res.gameOver) {
       this.phase = PHASE.GAME_OVER;
-      this.winner = 'player';
-      return res;
+      this.winner = 'ai';
+    } else {
+      // einfache Regel: nach jedem KI-Schuss ist wieder der Spieler dran
+      this.phase = PHASE.PLAYER_TURN;
     }
-    // Wechsel der Runde nur bei miss oder versenkt? (variiert je nach Regel)
-    if (res.result === 'miss' || res.result === 'sunk') {
-      this.phase = PHASE.AI_TURN;
-    }
-    return res;
-  }
-
-  // KI-Schuss (kommt in Schritt 5)
-  aiShootRandomStub() {
-    // Placeholder: direkt zurück zum Spieler
-    this.phase = PHASE.PLAYER_TURN;
+    return { ok: true, cell: pick, ...res };
   }
 }
 
-// Hilfsfunktion: Flottenliste auf einzelne Einträge expandieren
 function expandFleet(fleetDef) {
   const result = [];
   for (const t of fleetDef) {
