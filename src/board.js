@@ -1,4 +1,4 @@
-// [BATTLESHIP_AR:STEP 5] Board: Ghost & Schiffe + Treffer/Wasser-Marker
+// [BATTLESHIP_AR:STEP 5 PATCH] Board: Ghost klar sichtbar (mit Outline), höher gelegt
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 
 export class Board extends THREE.Group {
@@ -11,6 +11,7 @@ export class Board extends THREE.Group {
     this.divisions = divisions;
     this.cellSize = size / divisions;
 
+    // Basis
     const base = new THREE.Mesh(
       new THREE.PlaneGeometry(size, size),
       new THREE.MeshBasicMaterial({ color: 0x0a0a12, transparent: true, opacity: 0.9 })
@@ -31,11 +32,13 @@ export class Board extends THREE.Group {
     border.rotateX(-Math.PI / 2);
     this.add(border);
 
+    // Picking
     const pickingPlane = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ visible: false }));
     pickingPlane.rotateX(-Math.PI / 2);
     this.pickingPlane = pickingPlane;
     this.add(pickingPlane);
 
+    // Einzel-Highlight (nur für Hover außerhalb Platzierung)
     const hlGeom = new THREE.PlaneGeometry(this.cellSize, this.cellSize);
     const hlMat = new THREE.MeshBasicMaterial({ color: 0x33ffaa, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
     const highlight = new THREE.Mesh(hlGeom, hlMat);
@@ -45,19 +48,21 @@ export class Board extends THREE.Group {
     this.highlight = highlight;
     this.add(highlight);
 
+    // Ghost & Visuals
     this.ghostGroup = new THREE.Group();
-    this.ghostGroup.position.y = 0.003;
+    this.ghostGroup.position.y = 0.010; // höher als Highlight -> immer sichtbar
     this.add(this.ghostGroup);
 
     this.shipsGroup = new THREE.Group();
-    this.shipsGroup.position.y = 0.004;
+    this.shipsGroup.position.y = 0.012;
     this.add(this.shipsGroup);
 
-    this.shotsGroup = new THREE.Group(); // Treffer/Wasser
-    this.shotsGroup.position.y = 0.005;
+    this.shotsGroup = new THREE.Group();
+    this.shotsGroup.position.y = 0.014;
     this.add(this.shotsGroup);
 
-    this.markers = new Map(); // Testpins aus Step 2
+    // Testpins (Step 2)
+    this.markers = new Map();
   }
 
   worldToCell(worldPoint) {
@@ -123,16 +128,40 @@ export class Board extends THREE.Group {
 
   showGhost(cells, valid) {
     this.clearGhost();
-    const color = valid ? 0x44ff66 : 0xff5566;
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+
+    // Deutlichere Ghost-Kacheln
+    const fillMat = new THREE.MeshBasicMaterial({
+      color: valid ? 0x00ff66 : 0xff3366,
+      transparent: true,
+      opacity: 0.40,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.9
+    });
+
     for (const c of cells) {
-      const quad = new THREE.Mesh(new THREE.PlaneGeometry(this.cellSize, this.cellSize), mat);
-      quad.rotateX(-Math.PI / 2);
       const p = this.cellCenterLocal(c.i, c.j);
+
+      const quad = new THREE.Mesh(new THREE.PlaneGeometry(this.cellSize, this.cellSize), fillMat);
+      quad.rotateX(-Math.PI / 2);
       quad.position.set(p.x, 0, p.z);
       this.ghostGroup.add(quad);
+
+      // Umrandung je Kachel
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.PlaneGeometry(this.cellSize, this.cellSize)),
+        edgeMat
+      );
+      edges.rotateX(-Math.PI / 2);
+      edges.position.set(p.x, 0.0002, p.z);
+      this.ghostGroup.add(edges);
     }
   }
+
   clearGhost() { this.ghostGroup.clear(); }
 
   placeShipVisual(cells) {
@@ -146,11 +175,9 @@ export class Board extends THREE.Group {
     }
   }
 
-  // --- Treffer/Wasser-Visuals ---
   addShotMarker(i, j, isHit) {
     const p = this.cellCenterLocal(i, j);
     if (isHit) {
-      // roter „Treffer“-Puck
       const m = new THREE.Mesh(
         new THREE.CircleGeometry(this.cellSize * 0.28, 24).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.95 })
@@ -158,7 +185,6 @@ export class Board extends THREE.Group {
       m.position.set(p.x, 0, p.z);
       this.shotsGroup.add(m);
     } else {
-      // weißes „Wasser“-Pünktchen
       const m = new THREE.Mesh(
         new THREE.CircleGeometry(this.cellSize * 0.16, 16).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 })
