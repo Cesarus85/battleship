@@ -1,4 +1,4 @@
-// [BATTLESHIP_AR:STEP 5] State: KI-Platzierung & KI-Schüsse
+// [BATTLESHIP_AR:STEP 6] State: Spieler-Schuss + KI-Schuss + getrennte Boards
 import { BoardModel, DEFAULT_FLEET, CELL } from './model.js';
 
 export const PHASE = {
@@ -42,7 +42,6 @@ export class GameState {
     if (this.phase !== PHASE.PLACE_PLAYER) return { ok: false, reason: 'wrong_phase' };
     const shipType = this.player.fleet[this.player.nextShipIndex];
     if (!shipType) return { ok: false, reason: 'no_more_ships' };
-
     const ok = this.player.board.placeShip(shipType, i, j, this.player.orientation);
     if (!ok) return { ok: false, reason: 'invalid_position' };
 
@@ -53,12 +52,11 @@ export class GameState {
     return { ok: true, shipType, placedAll: this.phase === PHASE.PLACE_AI };
   }
 
-  // --- NEU in Step 5: KI zufällig platzieren ---
+  // KI platziert zufällig (regelkonform, ohne Überlappung)
   aiPlaceFleetRandom() {
     if (this.phase !== PHASE.PLACE_AI) return { ok: false, reason: 'wrong_phase' };
     for (const type of this.ai.fleet) {
-      let placed = false;
-      let safety = 0;
+      let placed = false, safety = 0;
       while (!placed && safety++ < 500) {
         const dir = Math.random() < 0.5 ? 'h' : 'v';
         const maxI = dir === 'h' ? this.ai.board.size - type.length : this.ai.board.size - 1;
@@ -73,13 +71,26 @@ export class GameState {
     return { ok: true };
   }
 
-  // --- NEU in Step 5: KI schießt zufällig (keine Wiederholung) ---
-  aiShootRandom() {
-    if (this.phase !== PHASE.AI_TURN && this.phase !== PHASE.PLAYER_TURN) {
-      return { ok: false, reason: 'wrong_phase' };
-    }
+  // Spieler schießt auf das KI-Board
+  playerShoot(i, j) {
+    if (this.phase !== PHASE.PLAYER_TURN) return { ok: false, reason: 'wrong_phase' };
+    const res = this.ai.board.shoot(i, j);
+    if (!res.ok) return res; // repeat/out
 
-    // Ziel: eine unbeschossene Zelle auf dem Spieler-Board finden
+    if (res.gameOver) {
+      this.phase = PHASE.GAME_OVER;
+      this.winner = 'player';
+    } else {
+      // einfacher Wechsel: nach jedem Spielerschuss ist KI dran
+      this.phase = PHASE.AI_TURN;
+    }
+    return res;
+  }
+
+  // KI schießt zufällig auf Spieler-Board
+  aiShootRandom() {
+    if (this.phase !== PHASE.AI_TURN) return { ok: false, reason: 'wrong_phase' };
+
     const candidates = [];
     for (let j = 0; j < this.player.board.size; j++) {
       for (let i = 0; i < this.player.board.size; i++) {
@@ -94,13 +105,12 @@ export class GameState {
     }
 
     const pick = candidates[Math.floor(Math.random() * candidates.length)];
-    const res = this.player.board.shoot(pick.i, pick.j); // nutzt Model-Logik
+    const res = this.player.board.shoot(pick.i, pick.j);
 
     if (res.gameOver) {
       this.phase = PHASE.GAME_OVER;
       this.winner = 'ai';
     } else {
-      // einfache Regel: nach jedem KI-Schuss ist wieder der Spieler dran
       this.phase = PHASE.PLAYER_TURN;
     }
     return { ok: true, cell: pick, ...res };
@@ -109,10 +119,7 @@ export class GameState {
 
 function expandFleet(fleetDef) {
   const result = [];
-  for (const t of fleetDef) {
-    for (let k = 0; k < t.count; k++) {
-      result.push(new (t.constructor)(t.name, t.length, 1));
-    }
-  }
+  for (const t of fleetDef) for (let k = 0; k < t.count; k++)
+    result.push(new (t.constructor)(t.name, t.length, 1));
   return result;
 }
