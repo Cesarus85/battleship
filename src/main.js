@@ -1,4 +1,4 @@
-// [BATTLESHIP_AR:STEP 5] KI-Flotte platzieren + KI-Schüsse (Test via A-Taste)
+// [BATTLESHIP_AR:STEP 5 FIX] Korrekte Button-Mappings (A/X=3, Y/B=4, Stick=2) + Fallback
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
@@ -20,7 +20,14 @@ let debugDot = null;
 
 // Button-Edge-Detection
 const prevButtons = new Map();
-const BTN = { A: 0, B: 1, X: 2, Y: 3 };
+// WebXR (Quest Touch) übliche Indizes:
+const IDX = {
+  TRIGGER: 0,
+  SQUEEZE: 1,
+  STICK: 2, // Thumbstick-Press
+  AX: 3,    // A (rechts) / X (links)
+  BY: 4     // B (rechts) / Y (links)
+};
 
 init();
 animate();
@@ -149,8 +156,8 @@ function render(_, frame) {
       debugDot.visible = false;
     }
 
-    // Poll Buttons für Testfunktionen in Step 5
-    pollButtonsForStep5(frame);
+    // Buttons pollen (Rotation & KI-Testschuss)
+    pollButtons(frame);
   }
 
   renderer.render(scene, camera);
@@ -209,13 +216,9 @@ function onSelect() {
       board.clearGhost();
 
       if (res.placedAll) {
-        // --- NEU: KI platziert Flotte ---
         const ar = game.aiPlaceFleetRandom();
-        if (!ar.ok) {
-          setHUD(`Fehler bei KI-Platzierung: ${ar.reason}`);
-          return;
-        }
-        setHUD(`Phase: ${game.phase} — Deine Runde. (Schießen implementieren wir in Schritt 6) — Drücke A für einen KI-Testschuss.`);
+        if (!ar.ok) { setHUD(`Fehler bei KI-Platzierung: ${ar.reason}`); return; }
+        setHUD(`Phase: ${game.phase} — Deine Runde. (Test: A/X ODER Stick drücken für KI-Schuss)`);
       } else {
         const next = game.player.fleet[game.player.nextShipIndex];
         setHUD(`Phase: ${game.phase} — Nächstes Schiff: ${next.name} (${next.length}) | Ausrichtung: ${game.player.orientation}`);
@@ -227,40 +230,52 @@ function onSelect() {
   }
 }
 
-// Buttons auslesen: Y/B (drehen) in PLACE_PLAYER, A (KI-Testschuss) in PLAYER_TURN
-function pollButtonsForStep5(frame) {
+// Buttons: Y/B zum Drehen (Index 4), A/X oder Stick-Press (Index 3/2) für KI-Testschuss
+function pollButtons(frame) {
   for (const c of controllers) {
     const src = c.userData.inputSource;
     const gp = src?.gamepad;
     if (!gp) continue;
 
+    // Bitmask aufbauen
     let mask = 0;
     gp.buttons.forEach((b, idx) => { if (b?.pressed) mask |= (1 << idx); });
 
     const prev = prevButtons.get(c) ?? 0;
-    const justA = ((mask & (1 << BTN.A)) && !(prev & (1 << BTN.A)));
-    const justB = ((mask & (1 << BTN.B)) && !(prev & (1 << BTN.B)));
-    const justY = ((mask & (1 << BTN.Y)) && !(prev & (1 << BTN.Y)));
+    const edge = (idx) => ((mask & (1 << idx)) && !(prev & (1 << idx)));
 
-    // Drehen nur in der Platzierungsphase
-    if (game.phase === PHASE.PLACE_PLAYER && (justB || justY)) {
+    const justAX   = edge(IDX.AX);    // A (rechts) / X (links)
+    const justBY   = edge(IDX.BY);    // B (rechts) / Y (links)
+    const justSTK  = edge(IDX.STICK); // Thumbstick-Press
+
+    // Debug: zeigen, welche Indizes erkannt wurden (einmalig pro Edge)
+    if (justAX || justBY || justSTK) {
+      setHUD(`Phase: ${game.phase} — Button Edge: ${[
+        justAX ? 'AX(3)' : null,
+        justBY ? 'BY(4)' : null,
+        justSTK ? 'STICK(2)' : null
+      ].filter(Boolean).join(', ')}`);
+    }
+
+    // Drehen nur in Platzierungsphase
+    if (game.phase === PHASE.PLACE_PLAYER && justBY) {
       setHUD(`Phase: ${game.phase} — Ausrichtung: ${game.toggleOrientation()}`);
     }
 
-    // KI-Testschuss sobald Spiel in PLAYER_TURN
-    if (game.phase === PHASE.PLAYER_TURN && justA) {
-      game.phase = PHASE.AI_TURN; // explizit wechseln
+    // KI-Testschuss in PLAYER_TURN (A/X ODER Stick)
+    if (game.phase === PHASE.PLAYER_TURN && (justAX || justSTK)) {
+      game.phase = PHASE.AI_TURN;
       const r = game.aiShootRandom();
       if (r && r.ok) {
         board.addShotMarker(r.cell.i, r.cell.j, r.result === 'hit' || r.result === 'sunk');
         if (r.result === 'hit') {
-          setHUD(`KI schießt: Treffer bei (${r.cell.i},${r.cell.j})${r.sunk ? ' — Schiff versenkt!' : ''}${r.gameOver ? ' — GAME OVER (KI gewinnt)' : ''}`);
+          setHUD(`KI: Treffer bei (${r.cell.i},${r.cell.j})${r.sunk ? ' — Schiff versenkt!' : ''}${r.gameOver ? ' — GAME OVER (KI)' : ''}`);
         } else if (r.result === 'sunk') {
-          setHUD(`KI schießt: Schiff versenkt bei (${r.cell.i},${r.cell.j})${r.gameOver ? ' — GAME OVER (KI gewinnt)' : ''}`);
+          setHUD(`KI: Schiff versenkt bei (${r.cell.i},${r.cell.j})${r.gameOver ? ' — GAME OVER (KI)' : ''}`);
         } else if (r.result === 'miss') {
-          setHUD(`KI schießt: Wasser bei (${r.cell.i},${r.cell.j}). Dein Zug (Schießen folgt in Schritt 6).`);
+          setHUD(`KI: Wasser bei (${r.cell.i},${r.cell.j}). Dein Zug (Spielerschuss kommt in Schritt 6).`);
         } else if (r.result === 'repeat') {
-          setHUD(`KI versuchte Wiederholung — erneut A drücken.`);
+          setHUD('KI: Wiederholung — drücke erneut.');
         }
       } else {
         setHUD(r?.reason ? `KI-Schuss fehlgeschlagen: ${r.reason}` : 'KI-Schuss fehlgeschlagen.');
