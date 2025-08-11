@@ -251,10 +251,10 @@
                 
                 // Position the grid based on AR or 3D mode
                 if (this.xrSession) {
-                    // AR Mode: Grid in comfortable viewing position
-                    gridGroup.position.set(0, -0.3, -1.0); // Näher und höher
-                    gridGroup.rotation.x = -Math.PI / 8; // Weniger Neigung für bessere Sicht
-                    gridGroup.scale.set(1.5, 1, 1.5); // Größer für bessere Interaktion
+                    // AR Mode: Grid direkt vor dem Nutzer, wie ein schwebender Tisch
+                    gridGroup.position.set(0, 0, -0.8); // Direkt vor dem Nutzer
+                    gridGroup.rotation.x = 0; // Keine Neigung - flach horizontal
+                    gridGroup.scale.set(2, 1, 2); // Deutlich größer für bessere Sichtbarkeit
                 } else {
                     // 3D Mode: Grid at origin with slight rotation
                     gridGroup.position.set(0, 0, -2);
@@ -273,7 +273,7 @@
             }
             
             addARFeatures() {
-                // Erstelle einen Reticle (Zielfadenkreuz)
+                // Erstelle einen Reticle (Zielfadenkreuz) - direkt vor dem Nutzer
                 const reticleGeometry = new THREE.RingGeometry(0.02, 0.03, 16);
                 const reticleMaterial = new THREE.MeshBasicMaterial({ 
                     color: 0xffffff,
@@ -281,7 +281,7 @@
                     opacity: 0.8
                 });
                 this.reticle = new THREE.Mesh(reticleGeometry, reticleMaterial);
-                this.reticle.position.set(0, -0.29, -1.0);
+                this.reticle.position.set(0, 0.01, -0.8); // Knapp über dem Spielfeld
                 this.reticle.rotation.x = -Math.PI / 2;
                 this.scene.add(this.reticle);
                 
@@ -326,7 +326,7 @@
                 
                 const geometry = new THREE.PlaneGeometry(1, 0.5);
                 const textMesh = new THREE.Mesh(geometry, material);
-                textMesh.position.set(0, 0.5, -1.0);
+                textMesh.position.set(0, 0.3, -0.8); // Über dem Spielfeld
                 this.scene.add(textMesh);
                 this.titleText = textMesh;
             }
@@ -336,10 +336,14 @@
                     this.startGame(this.isARSupported);
                 });
                 
-                // Touch/click interaction
+                // Touch/click interaction - mit Touch-Support
                 this.renderer.domElement.addEventListener('click', (event) => {
                     this.handleInteraction(event);
                 });
+                
+                this.renderer.domElement.addEventListener('touchstart', (event) => {
+                    this.handleInteraction(event);
+                }, { passive: false });
                 
                 // Resize handler
                 window.addEventListener('resize', () => {
@@ -476,21 +480,40 @@
             handleInteraction(event) {
                 if (this.gameState !== 'playing' || !this.playerTurn) return;
                 
+                // Verhindere Standard-Touch-Verhalten
+                event.preventDefault();
+                
                 const rect = this.renderer.domElement.getBoundingClientRect();
                 const mouse = new THREE.Vector2();
-                mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-                mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+                
+                // Bessere Touch/Click-Koordinaten
+                let clientX = event.clientX;
+                let clientY = event.clientY;
+                
+                // Touch-Event-Unterstützung
+                if (event.touches && event.touches.length > 0) {
+                    clientX = event.touches[0].clientX;
+                    clientY = event.touches[0].clientY;
+                }
+                
+                mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+                mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
                 
                 const raycaster = new THREE.Raycaster();
                 raycaster.setFromCamera(mouse, this.camera);
                 
-                const intersects = raycaster.intersectObjects(this.gridObjects);
+                // Nur die Spielfeld-Zellen für Raycasting verwenden
+                const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
+                const intersects = raycaster.intersectObjects(cellMeshes);
+                
+                console.log('Interaction detected, intersects:', intersects.length);
                 
                 if (intersects.length > 0) {
                     const cell = intersects[0].object;
-                    if (cell.userData.type === 'gridCell') {
-                        this.makeMove(cell.userData.row, cell.userData.col, cell);
-                    }
+                    console.log('Cell clicked:', cell.userData.row, cell.userData.col);
+                    this.makeMove(cell.userData.row, cell.userData.col, cell);
+                } else {
+                    console.log('No cell intersected');
                 }
             }
             
