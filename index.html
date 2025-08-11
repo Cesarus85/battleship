@@ -1,115 +1,4 @@
-setupControllers() {
-                console.log('Setting up WebXR controllers...');
-                
-                // Controller 0 (right hand typically)
-                const controller1 = this.renderer.xr.getController(0);
-                controller1.addEventListener('selectstart', () => this.onControllerSelect(0));
-                controller1.addEventListener('selectend', () => this.onControllerSelectEnd(0));
-                this.scene.add(controller1);
-                this.controllers.push(controller1);
-                
-                // Controller 1 (left hand typically)  
-                const controller2 = this.renderer.xr.getController(1);
-                controller2.addEventListener('selectstart', () => this.onControllerSelect(1));
-                controller2.addEventListener('selectend', () => this.onControllerSelectEnd(1));
-                this.scene.add(controller2);
-                this.controllers.push(controller2);
-                
-                // Add visible controller models
-                const controllerModelFactory = new THREE.Group(); // Simplified
-                
-                // Add raycast lines for controllers
-                this.controllers.forEach((controller, index) => {
-                    // Create visible ray line
-                    const geometry = new THREE.BufferGeometry().setFromPoints([
-                        new THREE.Vector3(0, 0, 0),
-                        new THREE.Vector3(0, 0, -5)
-                    ]);
-                    const material = new THREE.LineBasicMaterial({ 
-                        color: index === 0 ? 0xff0000 : 0x0000ff, // Red for right, blue for left
-                        transparent: true,
-                        opacity: 0.8
-                    });
-                    const line = new THREE.Line(geometry, material);
-                    line.name = 'line';
-                    line.scale.z = 0; // Initially hidden
-                    controller.add(line);
-                    this.controllerLines.push(line);
-                    
-                    // Setup raycaster for this controller
-                    const raycaster = new THREE.Raycaster();
-                    this.controllerRaycasters.push(raycaster);
-                    
-                    console.log(`Controller ${index} setup complete`);
-                });
-            }
-            
-            onControllerSelect(controllerIndex) {
-                console.log(`Controller ${controllerIndex} select started`);
-                
-                if (this.gameState !== 'playing') {
-                    console.log('Game not in playing state');
-                    return;
-                }
-                
-                const controller = this.controllers[controllerIndex];
-                const raycaster = this.controllerRaycasters[controllerIndex];
-                const line = this.controllerLines[controllerIndex];
-                
-                // Show the ray line
-                line.scale.z = 1;
-                
-                // Setup raycaster from controller position and direction
-                const tempMatrix = new THREE.Matrix4();
-                tempMatrix.identity().extractRotation(controller.matrixWorld);
-                raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                
-                // Check intersections with game grid
-                const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
-                const intersects = raycaster.intersectObjects(cellMeshes);
-                
-                console.log(`Controller ${controllerIndex} raycasting found ${intersects.length} intersects`);
-                
-                if (intersects.length > 0) {
-                    const cell = intersects[0].object;
-                    console.log(`Controller ${controllerIndex} hit cell:`, cell.userData.row, cell.userData.col);
-                    
-                    // Visual feedback on the line
-                    line.material.color.setHex(0x00ff00); // Green when hitting
-                    
-                    // Make the move
-                    this.makeMove(cell.userData.row, cell.userData.col, cell);
-                } else {
-                    console.log(`Controller ${controllerIndex} no intersections`);
-                    line.material.color.setHex(0xff0000); // Red when missing
-                }
-            }
-            
-            onControllerSelectEnd(controllerIndex) {
-                console.log(`Controller ${controllerIndex} select ended`);
-                
-                const line = this.controllerLines[controllerIndex];
-                
-                // Hide the ray line
-                line.scale.z = 0;
-                
-                // Reset line color
-                line.material.color.setHex(controllerIndex === 0 ? 0xff0000 : 0x0000ff);
-            }            addTouchFeedback() {
-                // Füge einen großen, unsichtbaren Touch-Bereich hinzu
-                const touchGeometry = new THREE.PlaneGeometry(2, 2);
-                const touchMaterial = new THREE.MeshBasicMaterial({ 
-                    transparent: true,
-                    opacity: 0.0,
-                    side: THREE.DoubleSide
-                });
-                this.touchPlane = new THREE.Mesh(touchGeometry, touchMaterial);
-                this.touchPlane.position.set(0, 0.2, -0.6);
-                this.touchPlane.userData = { type: 'touchPlane' };
-                this.scene.add(this.touchPlane);
-                console.log('Touch plane added for better interaction');
-            }<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -173,6 +62,7 @@ setupControllers() {
         
         #controls {
             font-size: 14px;
+            line-height: 1.4;
         }
         
         #fallback {
@@ -182,18 +72,6 @@ setupControllers() {
             transform: translate(-50%, -50%);
             text-align: center;
             display: none;
-        }
-        
-        .grid-cell {
-            cursor: pointer;
-        }
-        
-        .hit {
-            background-color: #ff4444 !important;
-        }
-        
-        .miss {
-            background-color: #4444ff !important;
         }
     </style>
 </head>
@@ -206,8 +84,6 @@ setupControllers() {
             <div id="controls">
                 • Zielen Sie mit dem Controller auf ein Feld<br>
                 • Trigger drücken um zu schießen<br>
-                • Grüner Strahl = gültiges Ziel<br>
-                • Bewegen Sie sich um das Spielfeld herum<br>
                 • ESC zum Beenden
             </div>
         </div>
@@ -216,10 +92,6 @@ setupControllers() {
             <h2>WebXR nicht unterstützt</h2>
             <p>Ihr Gerät unterstützt kein WebXR AR.<br>
             Das Spiel läuft im 3D-Modus.</p>
-        </div>
-        
-        <div class="ar-hint" id="ar-hint">
-            🎯 Zielen Sie mit dem Controller und drücken Sie den Trigger
         </div>
     </div>
 
@@ -234,15 +106,11 @@ setupControllers() {
                 this.isARSupported = false;
                 this.gameGrid = [];
                 this.gridObjects = [];
-                this.gameState = 'menu'; // menu, playing, gameOver
-                this.playerTurn = true;
-                this.hitTestSource = null;
-                this.reticle = null;
+                this.gameState = 'menu';
                 
-                // WebXR Controller Support
-                this.controllers = [];
-                this.controllerRaycasters = [];
-                this.controllerLines = [];
+                // VR Controllers
+                this.controller1 = null;
+                this.controller2 = null;
                 
                 // Game constants
                 this.GRID_SIZE = 10;
@@ -263,12 +131,6 @@ setupControllers() {
                     try {
                         this.isARSupported = await navigator.xr.isSessionSupported('immersive-ar');
                         console.log('AR Support:', this.isARSupported);
-                        
-                        // Zusätzliche Checks für verschiedene AR-Modi
-                        if (!this.isARSupported) {
-                            this.isARSupported = await navigator.xr.isSessionSupported('immersive-vr');
-                            console.log('VR Support (fallback):', this.isARSupported);
-                        }
                     } catch (e) {
                         console.log('XR Check Error:', e);
                         this.isARSupported = false;
@@ -320,10 +182,80 @@ setupControllers() {
                     for (let col = 0; col < this.GRID_SIZE; col++) {
                         this.gameGrid[row][col] = {
                             hit: false,
-                            hasShip: Math.random() < 0.1, // 10% Chance für ein Schiff (temporär)
+                            hasShip: Math.random() < 0.15, // 15% Chance für ein Schiff
                             revealed: false
                         };
                     }
+                }
+            }
+            
+            setupControllers() {
+                console.log('Setting up VR controllers...');
+                
+                // Controller 1 (usually right hand)
+                this.controller1 = this.renderer.xr.getController(0);
+                this.controller1.addEventListener('selectstart', () => this.onControllerTrigger(0));
+                this.scene.add(this.controller1);
+                
+                // Add visible line for controller 1
+                const geometry1 = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, 0),
+                    new THREE.Vector3(0, 0, -2)
+                ]);
+                const material1 = new THREE.LineBasicMaterial({ color: 0xff0000 });
+                const line1 = new THREE.Line(geometry1, material1);
+                line1.name = 'line';
+                this.controller1.add(line1);
+                
+                // Controller 2 (usually left hand)
+                this.controller2 = this.renderer.xr.getController(1);
+                this.controller2.addEventListener('selectstart', () => this.onControllerTrigger(1));
+                this.scene.add(this.controller2);
+                
+                // Add visible line for controller 2
+                const geometry2 = new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(0, 0, 0),
+                    new THREE.Vector3(0, 0, -2)
+                ]);
+                const material2 = new THREE.LineBasicMaterial({ color: 0x0000ff });
+                const line2 = new THREE.Line(geometry2, material2);
+                line2.name = 'line';
+                this.controller2.add(line2);
+                
+                console.log('Controllers setup complete');
+            }
+            
+            onControllerTrigger(controllerIndex) {
+                console.log(`Controller ${controllerIndex} trigger pressed`);
+                
+                if (this.gameState !== 'playing') {
+                    console.log('Game not in playing state');
+                    return;
+                }
+                
+                const controller = controllerIndex === 0 ? this.controller1 : this.controller2;
+                
+                // Create raycaster from controller
+                const tempMatrix = new THREE.Matrix4();
+                tempMatrix.identity().extractRotation(controller.matrixWorld);
+                
+                const raycaster = new THREE.Raycaster();
+                raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+                raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+                
+                // Check intersections with grid cells
+                const cellMeshes = this.gridObjects.filter(obj => obj.userData && obj.userData.type === 'gridCell');
+                const intersects = raycaster.intersectObjects(cellMeshes);
+                
+                console.log(`Found ${intersects.length} intersections`);
+                
+                if (intersects.length > 0) {
+                    const cell = intersects[0].object;
+                    console.log('Hit cell:', cell.userData.row, cell.userData.col);
+                    this.makeMove(cell.userData.row, cell.userData.col, cell);
+                } else {
+                    console.log('No cell hit');
+                    this.updateStatus('Kein Feld getroffen - versuchen Sie es erneut');
                 }
             }
             
@@ -354,27 +286,18 @@ setupControllers() {
                         // Add user data for interaction
                         cell.userData = { row, col, type: 'gridCell' };
                         
-                        // Add border
-                        const borderGeometry = new THREE.EdgesGeometry(cellGeometry);
-                        const borderMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
-                        const border = new THREE.LineSegments(borderGeometry, borderMaterial);
-                        border.position.copy(cell.position);
-                        
                         gridGroup.add(cell);
-                        gridGroup.add(border);
                         this.gridObjects.push(cell);
-                        this.gridObjects.push(border);
                     }
                 }
                 
-                // Position the grid based on AR or 3D mode
+                // Position the grid
                 if (this.xrSession) {
-                    // AR Mode: Grid auf Augenhöhe, direkt vor dem Nutzer
-                    gridGroup.position.set(0, 0.2, -0.6); // Höher (0.2m über Augenhöhe) und näher
-                    gridGroup.rotation.x = 0; // Völlig flach
-                    gridGroup.scale.set(1.5, 1, 1.5); // Gut sichtbar aber nicht zu groß
+                    // AR Mode: Grid auf Augenhöhe
+                    gridGroup.position.set(0, 0.1, -0.8);
+                    gridGroup.scale.set(1.5, 1, 1.5);
                 } else {
-                    // 3D Mode: Grid at origin with slight rotation
+                    // 3D Mode
                     gridGroup.position.set(0, 0, -2);
                     gridGroup.rotation.x = -0.2;
                 }
@@ -382,105 +305,13 @@ setupControllers() {
                 this.scene.add(gridGroup);
                 this.gridGroup = gridGroup;
                 
-                // Füge AR-spezifische Features hinzu
-                if (this.xrSession) {
-                    this.addARFeatures();
-                }
-                
-                console.log('Game grid created, mode:', this.xrSession ? 'AR' : '3D');
-            }
-            
-            addARFeatures() {
-                // Erstelle einen Reticle (Zielfadenkreuz) - direkt vor dem Nutzer
-                const reticleGeometry = new THREE.RingGeometry(0.02, 0.03, 16);
-                const reticleMaterial = new THREE.MeshBasicMaterial({ 
-                    color: 0xffffff,
-                    transparent: true,
-                    opacity: 0.8
-                });
-                this.reticle = new THREE.Mesh(reticleGeometry, reticleMaterial);
-                this.reticle.position.set(0, 0.21, -0.6); // Knapp über dem Spielfeld
-                this.reticle.rotation.x = -Math.PI / 2;
-                this.scene.add(this.reticle);
-                
-                // Animiere das Reticle
-                const animateReticle = () => {
-                    if (this.reticle && this.xrSession) {
-                        this.reticle.rotation.z += 0.02;
-                        this.reticle.material.opacity = 0.5 + 0.3 * Math.sin(Date.now() * 0.005);
-                    }
-                };
-                this.reticleAnimation = animateReticle;
-                
-                // Füge Titel über dem Spielfeld hinzu
-                this.addFloatingText();
-                
-                // Füge Interaktions-Indikator hinzu
-                this.addInteractionHelper();
-            }
-            
-            addFloatingText() {
-                // Canvas für Text erstellen
-                const canvas = document.createElement('canvas');
-                const context = canvas.getContext('2d');
-                canvas.width = 512;
-                canvas.height = 256;
-                
-                context.fillStyle = 'rgba(0, 0, 0, 0.8)';
-                context.fillRect(0, 0, canvas.width, canvas.height);
-                
-                context.fillStyle = 'white';
-                context.font = 'bold 48px Arial';
-                context.textAlign = 'center';
-                context.fillText('SCHIFFE VERSENKEN', canvas.width / 2, 80);
-                
-                context.font = '32px Arial';
-                context.fillText('Controller-Trigger drücken', canvas.width / 2, 140);
-                context.fillText('Zielen mit dem Strahl', canvas.width / 2, 180);
-                
-                const texture = new THREE.CanvasTexture(canvas);
-                const material = new THREE.MeshBasicMaterial({ 
-                    map: texture, 
-                    transparent: true,
-                    alphaTest: 0.1
-                });
-                
-                const geometry = new THREE.PlaneGeometry(1, 0.5);
-                const textMesh = new THREE.Mesh(geometry, material);
-                textMesh.position.set(0, 0.5, -0.6); // Über dem Spielfeld
-                this.scene.add(textMesh);
-                this.titleText = textMesh;
-            }
-            
-            addInteractionHelper() {
-                // Erstelle sichtbare Hover-Effekte für Zellen
-                const helperGeometry = new THREE.RingGeometry(this.CELL_SIZE * 0.6, this.CELL_SIZE * 0.7, 16);
-                const helperMaterial = new THREE.MeshBasicMaterial({ 
-                    color: 0x00ff00,
-                    transparent: true,
-                    opacity: 0.0
-                });
-                this.hoverHelper = new THREE.Mesh(helperGeometry, helperMaterial);
-                this.hoverHelper.rotation.x = -Math.PI / 2;
-                this.scene.add(this.hoverHelper);
-                
-                // Touch-Feedback visuell verstärken
-                this.addTouchFeedback();
+                console.log('Game grid created');
             }
             
             setupEventListeners() {
                 document.getElementById('start-button').addEventListener('click', () => {
                     this.startGame(this.isARSupported);
                 });
-                
-                // Touch/click interaction - mit Touch-Support
-                this.renderer.domElement.addEventListener('click', (event) => {
-                    this.handleInteraction(event);
-                });
-                
-                this.renderer.domElement.addEventListener('touchstart', (event) => {
-                    this.handleInteraction(event);
-                }, { passive: false });
                 
                 // Resize handler
                 window.addEventListener('resize', () => {
@@ -505,109 +336,52 @@ setupControllers() {
                     try {
                         console.log('Requesting AR session...');
                         
-                        // Vereinfachte Session-Anfrage
-                        const sessionInit = {
-                            optionalFeatures: ['local', 'local-floor', 'bounded-floor'],
-                        };
+                        this.xrSession = await navigator.xr.requestSession('immersive-ar', {
+                            optionalFeatures: ['local', 'local-floor', 'bounded-floor']
+                        });
                         
-                        // Versuche DOM-Overlay nur wenn unterstützt
-                        try {
-                            if (await navigator.xr.isSessionSupported('immersive-ar', {
-                                optionalFeatures: ['dom-overlay']
-                            })) {
-                                sessionInit.optionalFeatures.push('dom-overlay');
-                                sessionInit.domOverlay = { root: document.getElementById('ui-overlay') };
-                            }
-                        } catch (e) {
-                            console.log('DOM overlay not supported, continuing without it');
-                        }
-                        
-                        this.xrSession = await navigator.xr.requestSession('immersive-ar', sessionInit);
-                        console.log('AR session created successfully');
-                        
-                        // Referenz-Raum einrichten
-                        const referenceSpace = await this.xrSession.requestReferenceSpace('local');
-                        this.referenceSpace = referenceSpace;
+                        console.log('AR session created');
                         
                         await this.renderer.xr.setSession(this.xrSession);
-                        console.log('Renderer XR session set');
                         
-                        // Setup WebXR Controllers
+                        // Setup controllers AFTER session is active
                         this.setupControllers();
                         
                         this.xrSession.addEventListener('end', () => {
                             console.log('AR session ended');
                             this.xrSession = null;
-                            this.referenceSpace = null;
-                            
-                            // Cleanup AR-spezifische Objekte
-                            if (this.reticle) {
-                                this.scene.remove(this.reticle);
-                                this.reticle = null;
-                            }
-                            if (this.titleText) {
-                                this.scene.remove(this.titleText);
-                                this.titleText = null;
-                            }
-                            
-                            // Cleanup Controllers
-                            this.controllers.forEach(controller => {
-                                this.scene.remove(controller);
-                            });
-                            this.controllers = [];
-                            this.controllerRaycasters = [];
-                            this.controllerLines = [];
-                            
-                            this.reticleAnimation = null;
-                            
+                            if (this.controller1) this.scene.remove(this.controller1);
+                            if (this.controller2) this.scene.remove(this.controller2);
+                            this.controller1 = null;
+                            this.controller2 = null;
                             document.getElementById('start-button').style.display = 'block';
                             document.getElementById('info-panel').style.display = 'none';
                             this.gameState = 'menu';
                         });
                         
-                        // Kurze Verzögerung vor Grid-Erstellung
                         setTimeout(() => {
                             this.createGameGrid();
                             this.gameState = 'playing';
-                            this.updateStatus('AR bereit - Wählen Sie ein Feld zum Schießen');
-                            
-                            // Zeige AR-Hinweis
-                            document.getElementById('ar-hint').style.display = 'block';
-                            setTimeout(() => {
-                                document.getElementById('ar-hint').style.display = 'none';
-                            }, 5000);
+                            this.updateStatus('AR bereit - Zielen und Trigger drücken');
                         }, 500);
                         
                     } catch (error) {
                         console.error('AR Session Error:', error);
-                        console.log('Fallback to 3D mode');
-                        this.updateStatus('AR fehlgeschlagen - 3D Modus wird geladen...');
-                        setTimeout(() => {
-                            this.fallbackTo3D();
-                        }, 1000);
+                        this.fallbackTo3D();
                     }
                 } else {
                     this.fallbackTo3D();
                 }
                 
-                if (!useAR) {
-                    this.createGameGrid();
-                    this.gameState = 'playing';
-                }
-                
                 this.startRenderLoop();
-                
-                if (!useAR) {
-                    this.updateStatus('3D Modus - Wählen Sie ein Feld zum Schießen');
-                }
             }
             
             fallbackTo3D() {
-                // Add orbit controls for 3D mode
-                this.camera.position.set(0, 2, 3);
-                this.camera.lookAt(0, 0, 0);
+                this.createGameGrid();
+                this.gameState = 'playing';
+                this.updateStatus('3D Modus - Bewegen Sie die Maus um zu schauen');
                 
-                // Simple mouse controls
+                // Simple mouse controls for 3D mode
                 let mouseX = 0, mouseY = 0;
                 let isMouseDown = false;
                 
@@ -624,95 +398,33 @@ setupControllers() {
                         this.camera.lookAt(0, 0, 0);
                     }
                 });
-            }
-            
-            handleInteraction(event) {
-                if (this.gameState !== 'playing') {
-                    console.log('Game not in playing state:', this.gameState);
-                    return;
-                }
                 
-                // Verhindere Standard-Touch-Verhalten
-                event.preventDefault();
-                
-                const rect = this.renderer.domElement.getBoundingClientRect();
-                const mouse = new THREE.Vector2();
-                
-                // Bessere Touch/Click-Koordinaten
-                let clientX = event.clientX;
-                let clientY = event.clientY;
-                
-                // Touch-Event-Unterstützung
-                if (event.touches && event.touches.length > 0) {
-                    clientX = event.touches[0].clientX;
-                    clientY = event.touches[0].clientY;
-                }
-                
-                mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-                mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-                
-                console.log('Touch coordinates:', mouse.x, mouse.y);
-                
-                const raycaster = new THREE.Raycaster();
-                raycaster.setFromCamera(mouse, this.camera);
-                
-                // Erweiterte Raycasting-Objekte
-                const allInteractables = [
-                    ...this.gridObjects.filter(obj => obj.userData.type === 'gridCell'),
-                    this.touchPlane
-                ].filter(obj => obj); // Filtere undefined Objekte
-                
-                const intersects = raycaster.intersectObjects(allInteractables);
-                
-                console.log('Raycasting intersects:', intersects.length);
-                console.log('Available objects for interaction:', allInteractables.length);
-                
-                if (intersects.length > 0) {
-                    const hit = intersects[0];
-                    console.log('Hit object:', hit.object.userData);
+                // Click to shoot in 3D mode
+                this.renderer.domElement.addEventListener('click', (event) => {
+                    if (this.gameState !== 'playing') return;
                     
-                    if (hit.object.userData.type === 'gridCell') {
-                        console.log('Direct cell hit:', hit.object.userData.row, hit.object.userData.col);
-                        this.makeMove(hit.object.userData.row, hit.object.userData.col, hit.object);
-                    } else if (hit.object.userData.type === 'touchPlane') {
-                        // Berechne welche Zelle basierend auf der Touch-Position
-                        const localPoint = hit.point.clone();
-                        const gridX = Math.floor((localPoint.x + 0.5) * this.GRID_SIZE);
-                        const gridZ = Math.floor((-localPoint.z + 0.3) * this.GRID_SIZE / 0.6 * this.GRID_SIZE);
-                        
-                        console.log('Touch plane hit, calculated grid:', gridX, gridZ);
-                        
-                        if (gridX >= 0 && gridX < this.GRID_SIZE && gridZ >= 0 && gridZ < this.GRID_SIZE) {
-                            const cellIndex = gridZ * this.GRID_SIZE + gridX;
-                            const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
-                            if (cellMeshes[cellIndex]) {
-                                console.log('Making move on calculated cell:', gridZ, gridX);
-                                this.makeMove(gridZ, gridX, cellMeshes[cellIndex]);
-                            }
-                        }
+                    const rect = this.renderer.domElement.getBoundingClientRect();
+                    const mouse = new THREE.Vector2();
+                    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+                    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+                    
+                    const raycaster = new THREE.Raycaster();
+                    raycaster.setFromCamera(mouse, this.camera);
+                    
+                    const cellMeshes = this.gridObjects.filter(obj => obj.userData && obj.userData.type === 'gridCell');
+                    const intersects = raycaster.intersectObjects(cellMeshes);
+                    
+                    if (intersects.length > 0) {
+                        const cell = intersects[0].object;
+                        this.makeMove(cell.userData.row, cell.userData.col, cell);
                     }
-                } else {
-                    console.log('No intersections found');
-                    
-                    // Alternative: Einfach eine zufällige Zelle für Test-Zwecke
-                    const testRow = Math.floor(Math.random() * this.GRID_SIZE);
-                    const testCol = Math.floor(Math.random() * this.GRID_SIZE);
-                    const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
-                    const testIndex = testRow * this.GRID_SIZE + testCol;
-                    
-                    if (cellMeshes[testIndex] && !this.gameGrid[testRow][testCol].revealed) {
-                        console.log('Fallback: random cell for testing:', testRow, testCol);
-                        this.makeMove(testRow, testCol, cellMeshes[testIndex]);
-                        this.updateStatus('Test-Schuss auf zufällige Zelle!');
-                    }
-                }
+                });
             }
             
             makeMove(row, col, cellObject) {
                 const cell = this.gameGrid[row][col];
                 
                 if (cell.revealed) {
-                    console.log('Cell already revealed:', row, col);
                     this.updateStatus('Dieses Feld wurde bereits beschossen!');
                     return;
                 }
@@ -726,7 +438,7 @@ setupControllers() {
                     cell.hit = true;
                     cellObject.material.color.setHex(0xff4444);
                     cellObject.material.opacity = 1;
-                    this.updateStatus('🎯 TREFFER! Gut geschossen!');
+                    this.updateStatus('🎯 TREFFER!');
                     
                     // Create hit effect
                     this.createHitEffect(cellObject.position);
@@ -734,7 +446,7 @@ setupControllers() {
                     // Miss
                     cellObject.material.color.setHex(0x444444);
                     cellObject.material.opacity = 0.8;
-                    this.updateStatus('💦 Verfehlt! Versuchen Sie es erneut.');
+                    this.updateStatus('💦 Verfehlt!');
                     
                     // Create miss effect
                     this.createMissEffect(cellObject.position);
@@ -747,7 +459,6 @@ setupControllers() {
             }
             
             makeAIMove() {
-                // Simple random AI
                 let attempts = 0;
                 let row, col;
                 
@@ -758,11 +469,10 @@ setupControllers() {
                 } while (this.gameGrid[row][col].revealed && attempts < 100);
                 
                 if (attempts < 100) {
-                    // Find the corresponding visual cell
                     const cellIndex = row * this.GRID_SIZE + col;
-                    if (this.gridObjects[cellIndex * 2]) { // *2 because we have borders too
+                    if (this.gridObjects[cellIndex]) {
                         setTimeout(() => {
-                            this.makeMove(row, col, this.gridObjects[cellIndex * 2]);
+                            this.makeMove(row, col, this.gridObjects[cellIndex]);
                         }, 500);
                     }
                 }
@@ -792,13 +502,12 @@ setupControllers() {
                 
                 this.scene.add(particles);
                 
-                // Animate particles
                 let time = 0;
                 const animate = () => {
                     time += 0.016;
                     particles.children.forEach(particle => {
                         particle.position.add(particle.velocity);
-                        particle.velocity.y -= 0.005; // gravity
+                        particle.velocity.y -= 0.005;
                         particle.material.opacity = Math.max(0, 1 - time * 2);
                     });
                     
@@ -834,7 +543,6 @@ setupControllers() {
                 
                 this.scene.add(splash);
                 
-                // Animate splash
                 let time = 0;
                 const animate = () => {
                     time += 0.016;
@@ -859,63 +567,7 @@ setupControllers() {
             
             startRenderLoop() {
                 this.renderer.setAnimationLoop(() => {
-                    // AR-spezifische Animationen
-                    if (this.reticleAnimation) {
-                        this.reticleAnimation();
-                    }
-                    
-                    // Update controller raycasting in real-time
-                    this.updateControllerRaycasting();
-                    
                     this.renderer.render(this.scene, this.camera);
-                });
-            }
-            
-            updateControllerRaycasting() {
-                if (!this.xrSession || this.controllers.length === 0) return;
-                
-                this.controllers.forEach((controller, index) => {
-                    if (controller.visible) {
-                        const raycaster = this.controllerRaycasters[index];
-                        const line = this.controllerLines[index];
-                        
-                        // Update raycaster continuously
-                        const tempMatrix = new THREE.Matrix4();
-                        tempMatrix.identity().extractRotation(controller.matrixWorld);
-                        raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-                        raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-                        
-                        // Check what we're pointing at
-                        const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
-                        const intersects = raycaster.intersectObjects(cellMeshes);
-                        
-                        // Update line length and color based on what we're hitting
-                        if (intersects.length > 0) {
-                            const distance = intersects[0].distance;
-                            const points = [
-                                new THREE.Vector3(0, 0, 0),
-                                new THREE.Vector3(0, 0, -distance)
-                            ];
-                            line.geometry.setFromPoints(points);
-                            
-                            // Change color if pointing at unrevealed cell
-                            const cell = intersects[0].object;
-                            const gridCell = this.gameGrid[cell.userData.row][cell.userData.col];
-                            if (!gridCell.revealed) {
-                                line.material.color.setHex(0x00ff00); // Green for valid target
-                            } else {
-                                line.material.color.setHex(0xffff00); // Yellow for already shot
-                            }
-                        } else {
-                            // Default line length when not hitting anything
-                            const points = [
-                                new THREE.Vector3(0, 0, 0),
-                                new THREE.Vector3(0, 0, -2)
-                            ];
-                            line.geometry.setFromPoints(points);
-                            line.material.color.setHex(index === 0 ? 0xff0000 : 0x0000ff);
-                        }
-                    }
                 });
             }
         }
