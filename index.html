@@ -1,4 +1,17 @@
-<!DOCTYPE html>
+addTouchFeedback() {
+                // Füge einen großen, unsichtbaren Touch-Bereich hinzu
+                const touchGeometry = new THREE.PlaneGeometry(2, 2);
+                const touchMaterial = new THREE.MeshBasicMaterial({ 
+                    transparent: true,
+                    opacity: 0.0,
+                    side: THREE.DoubleSide
+                });
+                this.touchPlane = new THREE.Mesh(touchGeometry, touchMaterial);
+                this.touchPlane.position.set(0, 0.2, -0.6);
+                this.touchPlane.userData = { type: 'touchPlane' };
+                this.scene.add(this.touchPlane);
+                console.log('Touch plane added for better interaction');
+            }<!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -251,10 +264,10 @@
                 
                 // Position the grid based on AR or 3D mode
                 if (this.xrSession) {
-                    // AR Mode: Grid direkt vor dem Nutzer, wie ein schwebender Tisch
-                    gridGroup.position.set(0, 0, -0.8); // Direkt vor dem Nutzer
-                    gridGroup.rotation.x = 0; // Keine Neigung - flach horizontal
-                    gridGroup.scale.set(2, 1, 2); // Deutlich größer für bessere Sichtbarkeit
+                    // AR Mode: Grid auf Augenhöhe, direkt vor dem Nutzer
+                    gridGroup.position.set(0, 0.2, -0.6); // Höher (0.2m über Augenhöhe) und näher
+                    gridGroup.rotation.x = 0; // Völlig flach
+                    gridGroup.scale.set(1.5, 1, 1.5); // Gut sichtbar aber nicht zu groß
                 } else {
                     // 3D Mode: Grid at origin with slight rotation
                     gridGroup.position.set(0, 0, -2);
@@ -281,7 +294,7 @@
                     opacity: 0.8
                 });
                 this.reticle = new THREE.Mesh(reticleGeometry, reticleMaterial);
-                this.reticle.position.set(0, 0.01, -0.8); // Knapp über dem Spielfeld
+                this.reticle.position.set(0, 0.21, -0.6); // Knapp über dem Spielfeld
                 this.reticle.rotation.x = -Math.PI / 2;
                 this.scene.add(this.reticle);
                 
@@ -296,6 +309,9 @@
                 
                 // Füge Titel über dem Spielfeld hinzu
                 this.addFloatingText();
+                
+                // Füge Interaktions-Indikator hinzu
+                this.addInteractionHelper();
             }
             
             addFloatingText() {
@@ -326,9 +342,25 @@
                 
                 const geometry = new THREE.PlaneGeometry(1, 0.5);
                 const textMesh = new THREE.Mesh(geometry, material);
-                textMesh.position.set(0, 0.3, -0.8); // Über dem Spielfeld
+                textMesh.position.set(0, 0.5, -0.6); // Über dem Spielfeld
                 this.scene.add(textMesh);
                 this.titleText = textMesh;
+            }
+            
+            addInteractionHelper() {
+                // Erstelle sichtbare Hover-Effekte für Zellen
+                const helperGeometry = new THREE.RingGeometry(this.CELL_SIZE * 0.6, this.CELL_SIZE * 0.7, 16);
+                const helperMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0x00ff00,
+                    transparent: true,
+                    opacity: 0.0
+                });
+                this.hoverHelper = new THREE.Mesh(helperGeometry, helperMaterial);
+                this.hoverHelper.rotation.x = -Math.PI / 2;
+                this.scene.add(this.hoverHelper);
+                
+                // Touch-Feedback visuell verstärken
+                this.addTouchFeedback();
             }
             
             setupEventListeners() {
@@ -478,7 +510,10 @@
             }
             
             handleInteraction(event) {
-                if (this.gameState !== 'playing' || !this.playerTurn) return;
+                if (this.gameState !== 'playing') {
+                    console.log('Game not in playing state:', this.gameState);
+                    return;
+                }
                 
                 // Verhindere Standard-Touch-Verhalten
                 event.preventDefault();
@@ -499,28 +534,73 @@
                 mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
                 mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
                 
+                console.log('Touch coordinates:', mouse.x, mouse.y);
+                
                 const raycaster = new THREE.Raycaster();
                 raycaster.setFromCamera(mouse, this.camera);
                 
-                // Nur die Spielfeld-Zellen für Raycasting verwenden
-                const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
-                const intersects = raycaster.intersectObjects(cellMeshes);
+                // Erweiterte Raycasting-Objekte
+                const allInteractables = [
+                    ...this.gridObjects.filter(obj => obj.userData.type === 'gridCell'),
+                    this.touchPlane
+                ].filter(obj => obj); // Filtere undefined Objekte
                 
-                console.log('Interaction detected, intersects:', intersects.length);
+                const intersects = raycaster.intersectObjects(allInteractables);
+                
+                console.log('Raycasting intersects:', intersects.length);
+                console.log('Available objects for interaction:', allInteractables.length);
                 
                 if (intersects.length > 0) {
-                    const cell = intersects[0].object;
-                    console.log('Cell clicked:', cell.userData.row, cell.userData.col);
-                    this.makeMove(cell.userData.row, cell.userData.col, cell);
+                    const hit = intersects[0];
+                    console.log('Hit object:', hit.object.userData);
+                    
+                    if (hit.object.userData.type === 'gridCell') {
+                        console.log('Direct cell hit:', hit.object.userData.row, hit.object.userData.col);
+                        this.makeMove(hit.object.userData.row, hit.object.userData.col, hit.object);
+                    } else if (hit.object.userData.type === 'touchPlane') {
+                        // Berechne welche Zelle basierend auf der Touch-Position
+                        const localPoint = hit.point.clone();
+                        const gridX = Math.floor((localPoint.x + 0.5) * this.GRID_SIZE);
+                        const gridZ = Math.floor((-localPoint.z + 0.3) * this.GRID_SIZE / 0.6 * this.GRID_SIZE);
+                        
+                        console.log('Touch plane hit, calculated grid:', gridX, gridZ);
+                        
+                        if (gridX >= 0 && gridX < this.GRID_SIZE && gridZ >= 0 && gridZ < this.GRID_SIZE) {
+                            const cellIndex = gridZ * this.GRID_SIZE + gridX;
+                            const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
+                            if (cellMeshes[cellIndex]) {
+                                console.log('Making move on calculated cell:', gridZ, gridX);
+                                this.makeMove(gridZ, gridX, cellMeshes[cellIndex]);
+                            }
+                        }
+                    }
                 } else {
-                    console.log('No cell intersected');
+                    console.log('No intersections found');
+                    
+                    // Alternative: Einfach eine zufällige Zelle für Test-Zwecke
+                    const testRow = Math.floor(Math.random() * this.GRID_SIZE);
+                    const testCol = Math.floor(Math.random() * this.GRID_SIZE);
+                    const cellMeshes = this.gridObjects.filter(obj => obj.userData.type === 'gridCell');
+                    const testIndex = testRow * this.GRID_SIZE + testCol;
+                    
+                    if (cellMeshes[testIndex] && !this.gameGrid[testRow][testCol].revealed) {
+                        console.log('Fallback: random cell for testing:', testRow, testCol);
+                        this.makeMove(testRow, testCol, cellMeshes[testIndex]);
+                        this.updateStatus('Test-Schuss auf zufällige Zelle!');
+                    }
                 }
             }
             
             makeMove(row, col, cellObject) {
                 const cell = this.gameGrid[row][col];
                 
-                if (cell.revealed) return; // Already shot at
+                if (cell.revealed) {
+                    console.log('Cell already revealed:', row, col);
+                    this.updateStatus('Dieses Feld wurde bereits beschossen!');
+                    return;
+                }
+                
+                console.log('Making move on:', row, col, 'hasShip:', cell.hasShip);
                 
                 cell.revealed = true;
                 
@@ -529,7 +609,7 @@
                     cell.hit = true;
                     cellObject.material.color.setHex(0xff4444);
                     cellObject.material.opacity = 1;
-                    this.updateStatus('Treffer!');
+                    this.updateStatus('🎯 TREFFER! Gut geschossen!');
                     
                     // Create hit effect
                     this.createHitEffect(cellObject.position);
@@ -537,7 +617,7 @@
                     // Miss
                     cellObject.material.color.setHex(0x444444);
                     cellObject.material.opacity = 0.8;
-                    this.updateStatus('Verfehlt!');
+                    this.updateStatus('💦 Verfehlt! Versuchen Sie es erneut.');
                     
                     // Create miss effect
                     this.createMissEffect(cellObject.position);
@@ -546,7 +626,7 @@
                 // Simple AI move after delay
                 setTimeout(() => {
                     this.makeAIMove();
-                }, 1000);
+                }, 1500);
             }
             
             makeAIMove() {
