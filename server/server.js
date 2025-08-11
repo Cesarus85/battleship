@@ -1,14 +1,35 @@
-// Minimaler WebSocket-Signaling-Server für 1:1 WebRTC
-import { createServer } from 'http';
+// server/server.js — HTTPS + WSS Signaling-Server (1:1 WebRTC)
+// Start: node server/server.js
+// Erwartet Zertifikate unter ./server/cert/cert.pem und ./server/cert/key.pem
+
+import fs from 'fs';
+import path from 'path';
+import https from 'https';
 import { WebSocketServer } from 'ws';
 
-const server = createServer();
-const wss = new WebSocketServer({ server });
+// ---------- TLS laden ----------
+const CERT_DIR = path.resolve(process.cwd(), 'server', 'cert');
+const KEY_PATH  = path.join(CERT_DIR, 'key.pem');
+const CERT_PATH = path.join(CERT_DIR, 'cert.pem');
 
-/** rooms: Map<roomId, Set<ws>> (max 2) */
+if (!fs.existsSync(KEY_PATH) || !fs.existsSync(CERT_PATH)) {
+  console.error('[SIGNAL] TLS-Zertifikate fehlen.');
+  console.error('Erwartet:', KEY_PATH, 'und', CERT_PATH);
+  console.error('Siehe Anleitung unten, wie du sie erzeugst.');
+  process.exit(1);
+}
+
+const server = https.createServer({
+  key:  fs.readFileSync(KEY_PATH),
+  cert: fs.readFileSync(CERT_PATH),
+});
+
+const wss = new WebSocketServer({ server /*, path: '/signal'*/ });
+
+// ---------- Simple Rooms (max 2 Peers) ----------
+/** rooms: Map<roomId, Set<ws>> */
 const rooms = new Map();
 
-/** Broadcast helper (to other peer only) */
 function peerSend(roomId, sender, obj) {
   const set = rooms.get(roomId);
   if (!set) return;
@@ -19,57 +40,82 @@ function peerSend(roomId, sender, obj) {
   }
 }
 
+// ---------- Heartbeat (Zombie-Verbindungen vermeiden) ----------
+function heartbeat() { this.isAlive = true; }
+
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', heartbeat);
   ws.roomId = null;
 
   ws.on('message', async (data) => {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
 
+    // --- Raum beitreten ---
     if (msg.type === 'join') {
       const roomId = String(msg.room || '').trim();
-      if (!roomId) return ws.send(JSON.stringify({ type: 'error', reason: 'no_room' }));
-
+      if (!roomId) {
+        ws.send(JSON.stringify({ type: 'error', reason: 'no_room' }));
+        return;
+      }
       let set = rooms.get(roomId);
       if (!set) { set = new Set(); rooms.set(roomId, set); }
       if (set.size >= 2) {
-        return ws.send(JSON.stringify({ type: 'room_full' }));
+        ws.send(JSON.stringify({ type: 'room_full' }));
+        return;
       }
       set.add(ws);
       ws.roomId = roomId;
-
       const role = set.size === 1 ? 'host' : 'guest';
       ws.send(JSON.stringify({ type: 'joined', room: roomId, role }));
-      // inform the other peer
       peerSend(roomId, ws, { type: 'peer_joined' });
+      console.log(`[SIGNAL] ${role} joined room=${roomId} (size=${set.size})`);
       return;
     }
 
     if (!ws.roomId) return;
 
-    // Forward all signaling payload to the peer
+    // --- Signalisierungs-Daten weiterreichen ---
     if (msg.type === 'signal') {
-      return peerSend(ws.roomId, ws, { type: 'signal', data: msg.data });
+      peerSend(ws.roomId, ws, { type: 'signal', data: msg.data });
+      return;
     }
 
+    // --- Raum verlassen ---
     if (msg.type === 'leave') {
       const set = rooms.get(ws.roomId);
       if (set) { set.delete(ws); if (set.size === 0) rooms.delete(ws.roomId); }
       peerSend(ws.roomId, ws, { type: 'peer_left' });
+      console.log(`[SIGNAL] leave room=${ws.roomId}`);
       ws.roomId = null;
       return;
     }
   });
 
   ws.on('close', () => {
-    if (!ws.roomId) return;
-    const set = rooms.get(ws.roomId);
-    if (set) { set.delete(ws); if (set.size === 0) rooms.delete(ws.roomId); }
-    peerSend(ws.roomId, ws, { type: 'peer_left' });
+    if (ws.roomId) {
+      const set = rooms.get(ws.roomId);
+      if (set) { set.delete(ws); if (set.size === 0) rooms.delete(ws.roomId); }
+      peerSend(ws.roomId, ws, { type: 'peer_left' });
+      console.log(`[SIGNAL] close room=${ws.roomId}`);
+      ws.roomId = null;
+    }
   });
 });
 
-const PORT = process.env.PORT || 8080;
+// Ping alle 30s
+const interval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30_000);
+wss.on('close', () => clearInterval(interval));
+
+const PORT = Number(process.env.PORT || 8443);
 server.listen(PORT, () => {
-  console.log(`Signaling server listening on ws://localhost:${PORT}`);
+  console.log(`[SIGNAL] Listening on wss://localhost:${PORT}`);
+  console.log(`[SIGNAL] Cert: ${CERT_PATH}`);
 });
