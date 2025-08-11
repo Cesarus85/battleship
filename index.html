@@ -104,6 +104,10 @@
             <p>Ihr Gerät unterstützt kein WebXR AR.<br>
             Das Spiel läuft im 3D-Modus.</p>
         </div>
+        
+        <div class="ar-hint" id="ar-hint">
+            🎯 Schauen Sie auf das Spielfeld und tippen Sie auf ein Feld
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -119,6 +123,8 @@
                 this.gridObjects = [];
                 this.gameState = 'menu'; // menu, playing, gameOver
                 this.playerTurn = true;
+                this.hitTestSource = null;
+                this.reticle = null;
                 
                 // Game constants
                 this.GRID_SIZE = 10;
@@ -245,9 +251,10 @@
                 
                 // Position the grid based on AR or 3D mode
                 if (this.xrSession) {
-                    // AR Mode: Grid 1.5m in front and 0.5m below starting position
-                    gridGroup.position.set(0, -0.5, -1.5);
-                    gridGroup.rotation.x = -Math.PI / 6; // Slight tilt for better viewing
+                    // AR Mode: Grid in comfortable viewing position
+                    gridGroup.position.set(0, -0.3, -1.0); // Näher und höher
+                    gridGroup.rotation.x = -Math.PI / 8; // Weniger Neigung für bessere Sicht
+                    gridGroup.scale.set(1.5, 1, 1.5); // Größer für bessere Interaktion
                 } else {
                     // 3D Mode: Grid at origin with slight rotation
                     gridGroup.position.set(0, 0, -2);
@@ -257,7 +264,71 @@
                 this.scene.add(gridGroup);
                 this.gridGroup = gridGroup;
                 
+                // Füge AR-spezifische Features hinzu
+                if (this.xrSession) {
+                    this.addARFeatures();
+                }
+                
                 console.log('Game grid created, mode:', this.xrSession ? 'AR' : '3D');
+            }
+            
+            addARFeatures() {
+                // Erstelle einen Reticle (Zielfadenkreuz)
+                const reticleGeometry = new THREE.RingGeometry(0.02, 0.03, 16);
+                const reticleMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0xffffff,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                this.reticle = new THREE.Mesh(reticleGeometry, reticleMaterial);
+                this.reticle.position.set(0, -0.29, -1.0);
+                this.reticle.rotation.x = -Math.PI / 2;
+                this.scene.add(this.reticle);
+                
+                // Animiere das Reticle
+                const animateReticle = () => {
+                    if (this.reticle && this.xrSession) {
+                        this.reticle.rotation.z += 0.02;
+                        this.reticle.material.opacity = 0.5 + 0.3 * Math.sin(Date.now() * 0.005);
+                    }
+                };
+                this.reticleAnimation = animateReticle;
+                
+                // Füge Titel über dem Spielfeld hinzu
+                this.addFloatingText();
+            }
+            
+            addFloatingText() {
+                // Canvas für Text erstellen
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = 512;
+                canvas.height = 256;
+                
+                context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                
+                context.fillStyle = 'white';
+                context.font = 'bold 48px Arial';
+                context.textAlign = 'center';
+                context.fillText('SCHIFFE VERSENKEN', canvas.width / 2, 80);
+                
+                context.font = '32px Arial';
+                context.fillText('Tippen zum Schießen', canvas.width / 2, 140);
+                context.fillText('Bewegen Sie sich um das Feld', canvas.width / 2, 180);
+                
+                const texture = new THREE.CanvasTexture(canvas);
+                const material = new THREE.MeshBasicMaterial({ 
+                    map: texture, 
+                    transparent: true,
+                    alphaTest: 0.1
+                });
+                
+                const geometry = new THREE.PlaneGeometry(1, 0.5);
+                const textMesh = new THREE.Mesh(geometry, material);
+                textMesh.position.set(0, 0.5, -1.0);
+                this.scene.add(textMesh);
+                this.titleText = textMesh;
             }
             
             setupEventListeners() {
@@ -324,6 +395,18 @@
                             console.log('AR session ended');
                             this.xrSession = null;
                             this.referenceSpace = null;
+                            
+                            // Cleanup AR-spezifische Objekte
+                            if (this.reticle) {
+                                this.scene.remove(this.reticle);
+                                this.reticle = null;
+                            }
+                            if (this.titleText) {
+                                this.scene.remove(this.titleText);
+                                this.titleText = null;
+                            }
+                            this.reticleAnimation = null;
+                            
                             document.getElementById('start-button').style.display = 'block';
                             document.getElementById('info-panel').style.display = 'none';
                             this.gameState = 'menu';
@@ -334,6 +417,12 @@
                             this.createGameGrid();
                             this.gameState = 'playing';
                             this.updateStatus('AR bereit - Wählen Sie ein Feld zum Schießen');
+                            
+                            // Zeige AR-Hinweis
+                            document.getElementById('ar-hint').style.display = 'block';
+                            setTimeout(() => {
+                                document.getElementById('ar-hint').style.display = 'none';
+                            }, 5000);
                         }, 500);
                         
                     } catch (error) {
@@ -550,6 +639,11 @@
             
             startRenderLoop() {
                 this.renderer.setAnimationLoop(() => {
+                    // AR-spezifische Animationen
+                    if (this.reticleAnimation) {
+                        this.reticleAnimation();
+                    }
+                    
                     this.renderer.render(this.scene, this.camera);
                 });
             }
