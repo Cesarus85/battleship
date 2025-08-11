@@ -2,23 +2,56 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>AR Battleship – Step 2</title>
+  <title>AR Battleship – Schritt 7</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; }
     #hud {
-      position: fixed; left: 12px; bottom: 12px; right: 12px;
+      position: fixed; left: 12px; bottom: 12px; right: 140px;
       font: 14px/1.4 system-ui, sans-serif; color: #fff;
       background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 10px;
-      pointer-events: none;
+      pointer-events: none; user-select: none;
     }
     .small { opacity: .85; font-size: 12px; }
+
+    #btnReset {
+      position: fixed; bottom: 12px; right: 12px;
+      font: 14px system-ui, sans-serif; color: #111;
+      background: #00ffc8; border: 0; border-radius: 10px; padding: 10px 14px;
+      cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,.25);
+    }
+
+    /* Game Over Overlay */
+    #overlay {
+      position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.55);
+    }
+    #overlay .card {
+      background: rgba(20,20,28,0.95); color: #fff; border-radius: 14px; padding: 18px 20px;
+      width: min(420px, 90vw); text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    #overlay h2 { margin: 0 0 8px 0; font: 600 20px/1.2 system-ui, sans-serif; }
+    #overlay p { margin: 0 0 14px 0; opacity: .9; }
+    #btnAgain {
+      font: 14px system-ui, sans-serif; color: #111; background: #00ffc8;
+      border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <div id="hud">
-    <div><strong>AR Battleship</strong> — Schritt 2</div>
-    <div class="small">Platziere das Brett via Trigger. Ziele mit dem Controller auf eine Zelle (Highlight) und drücke Trigger, um sie zu markieren.</div>
+    <div><strong>AR Battleship</strong> — Schritt 7</div>
+    <div class="small">Platziere beide Bretter per Trigger. Dann: Flotte setzen (Y/B drehen). Schieße auf das rechte Brett.</div>
+  </div>
+  <button id="btnReset" type="button">Neustart</button>
+
+  <!-- Game Over Overlay -->
+  <div id="overlay">
+    <div class="card">
+      <h2 id="overlayTitle">Spielende</h2>
+      <p id="overlayMsg">Du hast gewonnen!</p>
+      <button id="btnAgain" type="button">Noch mal spielen</button>
+    </div>
   </div>
 
   <script type="module">

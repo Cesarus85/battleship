@@ -1,4 +1,4 @@
-// [BATTLESHIP_AR:STEP 6 PATCH] Raycast auf BEIDE Boards + sauberes Targeting
+// [BATTLESHIP_AR:STEP 7] Labels (DU/GEGNER), Reset, Game-Over-Overlay, Debug aus
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
@@ -15,13 +15,27 @@ let game = null;
 const controllers = [];
 const raycaster = new THREE.Raycaster();
 
+// Hover-State
 let lastHoverCell = null;
 let lastHoverTarget = null; // 'player' | 'ai' | null
+
+// Debug (standardmäßig AUS)
 let debugRay = null;
 let debugDot = null;
 
+// UI
+const overlay = document.getElementById('overlay');
+const overlayTitle = document.getElementById('overlayTitle');
+const overlayMsg = document.getElementById('overlayMsg');
+const btnAgain = document.getElementById('btnAgain');
+const btnReset = document.getElementById('btnReset');
+
+// Board-Labels (Sprites)
+let labelPlayer = null;
+let labelAI = null;
+
 const prevButtons = new Map();
-const IDX = { BY: 4 }; // für Rotation in Platzierungsphase
+const IDX = { BY: 4 }; // Y/B zum Drehen
 const BOARD_GAP = 1.2;
 
 init();
@@ -39,6 +53,7 @@ async function init() {
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.0));
 
+  // Retikel
   reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2),
     new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
@@ -46,6 +61,7 @@ async function init() {
   reticle.visible = false;
   scene.add(reticle);
 
+  // Controller
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
     c.userData.index = i;
@@ -56,13 +72,15 @@ async function init() {
     controllers.push(c);
   }
 
+  // Debug-Helfer (unsichtbar)
   const rayGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,0,-0.9)]);
-  debugRay = new THREE.Line(rayGeom, new THREE.LineBasicMaterial({ transparent:true, opacity:0.35 }));
+  debugRay = new THREE.Line(rayGeom, new THREE.LineBasicMaterial({ transparent:true, opacity:0.25 }));
   debugRay.visible = false; scene.add(debugRay);
 
   debugDot = new THREE.Mesh(new THREE.SphereGeometry(0.01, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
   debugDot.visible = false; scene.add(debugDot);
 
+  // AR-Button
   const btn = ARButton.createButton(renderer, {
     requiredFeatures: ['hit-test'],
     optionalFeatures: ['dom-overlay'],
@@ -74,8 +92,19 @@ async function init() {
   renderer.xr.addEventListener('sessionstart', onSessionStart);
   renderer.xr.addEventListener('sessionend', onSessionEnd);
 
+  // UI-Events
+  btnReset?.addEventListener('click', () => resetGame());
+  btnAgain?.addEventListener('click', () => { hideOverlay(); resetGame(); });
+
+  // GameState
+  newGame();
+  setHUD(`Phase: ${game.phase} — Platziere die Bretter mit Trigger.`);
+}
+
+function newGame() {
   game = new GameState();
-  setHUD(`Phase: ${game.phase} — Platziere das AR-Brett.`);
+  // Aufräumen falls vorher etwas da war
+  clearBoardsAndLabels();
 }
 
 function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
@@ -94,7 +123,7 @@ function render(_, frame) {
   // Hit-Test solange keine Boards
   if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
-    if (hits && hits.length > 0) {
+    if (hits?.length) {
       const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
       if (pose) {
         reticle.visible = true;
@@ -107,7 +136,6 @@ function render(_, frame) {
 
   if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
 
-  // XR-Ray bestimmen
   const ray = getXRRay(frame);
   if (!ray) {
     clearHover();
@@ -116,18 +144,18 @@ function render(_, frame) {
   }
   updateDebugRay(ray.origin, ray.direction);
 
-  // Beide Bretter intersecten (falls vorhanden)
+  // Intersections auf beide Boards prüfen
   let hitPlayer = null, hitAI = null;
   if (boardPlayer) { raycaster.set(ray.origin, ray.direction); hitPlayer = raycaster.intersectObject(boardPlayer.pickingPlane, false)[0] || null; }
   if (boardAI)     { raycaster.set(ray.origin, ray.direction); hitAI     = raycaster.intersectObject(boardAI.pickingPlane, false)[0]     || null; }
 
-  // Zielwahl je Phase (aber Raycast immer auf beide)
+  // Zielwahl je Phase
   if (game.phase === PHASE.PLACE_PLAYER) {
-    // Nur Spielerbrett relevant
     applyHover('player', hitPlayer);
     pollRotateButtons(frame);
-    // Ghost-Vorschau
-    if (lastHoverCell) {
+
+    // Ghost-Vorschau auf Spielerbrett
+    if (lastHoverCell && boardPlayer) {
       const type = game.player.fleet[game.player.nextShipIndex];
       if (type) {
         const cells = boardPlayer.cellsForShip(lastHoverCell, type.length, game.player.orientation);
@@ -136,17 +164,18 @@ function render(_, frame) {
         setHUD(`Phase: ${game.phase} — Schiff ${game.player.nextShipIndex + 1}/${game.player.fleet.length}: ${type.name} (${type.length}) | Ausrichtung: ${game.player.orientation}${valid ? '' : ' — ungültig'}`);
       }
     } else {
-      boardPlayer.clearGhost();
+      boardPlayer?.clearGhost();
     }
   } else if (game.phase === PHASE.PLAYER_TURN) {
-    // Nur Gegnerbrett relevant
-    boardPlayer.clearGhost();
+    // Zielen nur auf Gegnerbrett
+    boardPlayer?.clearGhost();
     applyHover('ai', hitAI);
   } else {
-    // Andere Phasen: nichts anvisieren
     clearHover();
     boardPlayer?.clearGhost();
   }
+
+  // Labels (Sprites) brauchen keine lookAt, sie sind Sprites: sie „billboarden“ automatisch
 
   renderer.render(scene, camera);
 }
@@ -154,9 +183,8 @@ function render(_, frame) {
 function applyHover(target, hit) {
   lastHoverTarget = null;
   lastHoverCell = null;
-  // Highlight ausblenden auf beiden
-  if (boardPlayer) boardPlayer.setHoverCell(null);
-  if (boardAI) boardAI.setHoverCell(null);
+  boardPlayer?.setHoverCell(null);
+  boardAI?.setHoverCell(null);
 
   if (!hit) { debugDot.visible = false; return; }
 
@@ -165,14 +193,9 @@ function applyHover(target, hit) {
   if (cell) {
     lastHoverTarget = target;
     lastHoverCell = cell;
-    if (target === 'player') {
-      // In PLACE_PLAYER: kein Einzel-Highlight (Ghost übernimmt)
-      debugDot.position.copy(hit.point); debugDot.visible = true;
-    } else {
-      // In PLAYER_TURN: Gegner-Highlight zeigen
-      boardAI.setHoverCell(cell);
-      debugDot.position.copy(hit.point); debugDot.visible = true;
-    }
+    if (target === 'ai') boardAI.setHoverCell(cell); // nur auf Gegnerbrett Highlight
+    debugDot.position.copy(hit.point);
+    debugDot.visible = false; // Debug-Punkt ist standardmäßig aus
   } else {
     debugDot.visible = false;
   }
@@ -208,7 +231,7 @@ function getXRRay(frame){
 }
 
 function onSelect(){
-  // 1) Boards platzieren
+  // 1) Boards + Labels platzieren
   if (!boardPlayer && !boardAI && reticle.visible) {
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
@@ -225,15 +248,22 @@ function onSelect(){
     boardAI.quaternion.copy(baseQuat);
     scene.add(boardAI);
 
+    // Labels setzen
+    labelPlayer = makeTextSprite('DU', '#2ad3ff', '#001018');
+    labelAI = makeTextSprite('GEGNER', '#ff5a5a', '#220000');
+    placeLabelAboveBoard(labelPlayer, boardPlayer, baseQuat);
+    placeLabelAboveBoard(labelAI, boardAI, baseQuat);
+
     game.beginPlacement();
     setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
     return;
   }
 
-  // 2) Spieler-Schiffe setzen (nur wenn wir tatsächlich über dem Spielerbrett stehen)
+  // 2) Spieler-Schiffe setzen (nur auf Spielerbrett wirksam)
   if (boardPlayer && game.phase === PHASE.PLACE_PLAYER && lastHoverCell && lastHoverTarget === 'player') {
     const type = game.player.fleet[game.player.nextShipIndex];
     if (!type) return;
+
     const ok = game.player.board.canPlaceShip(lastHoverCell.i, lastHoverCell.j, type.length, game.player.orientation);
     if (!ok) { setHUD(`Phase: ${game.phase} — Ungültig. Drehe (Y/B) oder andere Zelle.`); return; }
 
@@ -257,7 +287,7 @@ function onSelect(){
     return;
   }
 
-  // 3) Spielerschuss NUR wenn tatsächlich das Gegnerbrett anvisiert ist
+  // 3) Spielerschuss nur auf Gegnerbrett
   if (boardAI && game.phase === PHASE.PLAYER_TURN && lastHoverCell && lastHoverTarget === 'ai') {
     const res = game.playerShoot(lastHoverCell.i, lastHoverCell.j);
     if (!res.ok) {
@@ -271,14 +301,18 @@ function onSelect(){
     else if (res.result === 'sunk') setHUD(`Schiff versenkt (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
     else if (res.result === 'miss') setHUD(`Wasser (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
 
-    // Automatischer KI-Gegenschuss (falls nicht vorbei)
-    if (game.phase === PHASE.AI_TURN && !res.gameOver) {
+    // Game Over?
+    if (res.gameOver) { showOverlay(true); return; }
+
+    // KI-Gegenschuss
+    if (game.phase === PHASE.AI_TURN) {
       const k = game.aiShootRandom();
       if (k && k.ok) {
         boardPlayer.addShotMarker(k.cell.i, k.cell.j, k.result === 'hit' || k.result === 'sunk');
         if (k.result === 'hit') setHUD(`KI: Treffer (${k.cell.i},${k.cell.j})${k.sunk ? ' — versenkt!' : ''}${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
         else if (k.result === 'sunk') setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
         else if (k.result === 'miss') setHUD(`KI: Wasser (${k.cell.i},${k.cell.j}). Dein Zug.`);
+        if (k.gameOver) { showOverlay(false); }
       }
     }
   }
@@ -303,6 +337,82 @@ function updateDebugRay(origin, direction){
   const end = new THREE.Vector3().copy(direction).multiplyScalar(0.9).add(origin);
   arr[3]=end.x; arr[4]=end.y; arr[5]=end.z;
   debugRay.geometry.attributes.position.needsUpdate = true;
+  // debugRay.visible = true; // nur bei Bedarf!
+}
+
+// ---------- Labels / Overlay / Reset ----------
+
+function makeTextSprite(text, bg='#00ffc8', fg='#000') {
+  const pad = 16;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // Hintergrund (rounded)
+  const r = 28;
+  roundRect(ctx, pad, pad, canvas.width-2*pad, canvas.height-2*pad, r);
+  ctx.fillStyle = bg; ctx.fill();
+
+  // Text
+  ctx.fillStyle = fg;
+  ctx.font = 'bold 96px system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width/2, canvas.height/2);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.45, 0.22, 1); // Meter: Breite/Höhe
+  return sprite;
+}
+
+function roundRect(ctx, x, y, w, h, r){
+  const rr = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+rr, y);
+  ctx.arcTo(x+w, y,   x+w, y+h, rr);
+  ctx.arcTo(x+w, y+h, x,   y+h, rr);
+  ctx.arcTo(x,   y+h, x,   y,   rr);
+  ctx.arcTo(x,   y,   x+w, y,   rr);
+  ctx.closePath();
+}
+
+function placeLabelAboveBoard(sprite, board, boardQuat) {
+  // Position etwas "hinter" der oberen Kante, relativ zur Brett-Ausrichtung
+  const local = new THREE.Vector3(0, 0.08, -0.6 * 1.0); // y: Höhe, z: hintere Kante
+  const world = local.clone().applyQuaternion(boardQuat).add(board.position);
+  sprite.position.copy(world);
+  scene.add(sprite);
+}
+
+function showOverlay(playerWon) {
+  overlayTitle.textContent = playerWon ? '🎉 Du hast gewonnen!' : '💥 Du hast verloren';
+  overlayMsg.textContent = playerWon
+    ? 'Alle gegnerischen Schiffe wurden versenkt.'
+    : 'Deine Flotte wurde versenkt.';
+  overlay.style.display = 'flex';
+}
+function hideOverlay() { overlay.style.display = 'none'; }
+
+function resetGame() {
+  hideOverlay();
+  // Scene cleanup
+  clearBoardsAndLabels();
+  // State
+  newGame();
+  setHUD('Zurückgesetzt. Platziere die Bretter neu (Trigger).');
+}
+
+function clearBoardsAndLabels() {
+  if (boardPlayer) scene.remove(boardPlayer);
+  if (boardAI) scene.remove(boardAI);
+  if (labelPlayer) scene.remove(labelPlayer);
+  if (labelAI) scene.remove(labelAI);
+  boardPlayer = null; boardAI = null;
+  labelPlayer = null; labelAI = null;
+  lastHoverCell = null; lastHoverTarget = null;
 }
 
 function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
