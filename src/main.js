@@ -1,5 +1,4 @@
-// [BATTLESHIP_AR:STEP 11] Commit/Reveal (Anti-Cheat) + Singleplayer/Multiplayer wie zuvor
-
+// [BATTLESHIP_AR:STEP 12] Rejoin & Resync (Snapshot-Handshake) + Commit/Reveal + MP/SP
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
@@ -59,19 +58,19 @@ let effects = [];
 const SFX = (() => {
   let ctx = null;
   let enabled = false;
-  function ensure(){ if(!enabled) return false; if(!ctx) ctx = new (window.AudioContext||window.webkitAudioContext)(); if(ctx.state==='suspended') ctx.resume(); return true; }
-  function env(g, t0,a=0.005,d=0.12,r=0.06, peak=0.8, sustain=0) { g.cancelScheduledValues(t0); g.setValueAtTime(0.0001,t0); g.linearRampToValueAtTime(peak,t0+a); g.linearRampToValueAtTime(sustain,t0+a+d); g.linearRampToValueAtTime(0.0001,t0+a+d+r); }
+  function ensure(){ if(!enabled) return false; if(!ctx) ctx=new (window.AudioContext||window.webkitAudioContext)(); if(ctx.state==='suspended') ctx.resume(); return true; }
+  function env(g,t0,a=0.005,d=0.12,r=0.06,peak=0.8,sustain=0){ g.cancelScheduledValues(t0); g.setValueAtTime(0.0001,t0); g.linearRampToValueAtTime(peak,t0+a); g.linearRampToValueAtTime(sustain,t0+a+d); g.linearRampToValueAtTime(0.0001,t0+a+d+r); }
   function osc(type,freq,dur,vol=0.2){ if(!ensure())return; const t0=ctx.currentTime; const o=ctx.createOscillator(); const g=ctx.createGain(); o.type=type; o.frequency.value=freq; env(g.gain,t0,0.004,dur*0.6,dur*0.4,vol,0.0001); o.connect(g).connect(ctx.destination); o.start(t0); o.stop(t0+Math.max(0.02,dur)); }
   function sweep(type,f0,f1,dur=0.18,vol=0.25){ if(!ensure())return; const t0=ctx.currentTime; const o=ctx.createOscillator(); const g=ctx.createGain(); o.type=type; o.frequency.setValueAtTime(f0,t0); o.frequency.exponentialRampToValueAtTime(Math.max(1,f1),t0+dur); env(g.gain,t0,0.005,dur*0.7,dur*0.3,vol,0.0001); o.connect(g).connect(ctx.destination); o.start(t0); o.stop(t0+dur+0.05); }
   return {
-    toggle(on){ enabled = on; if(on) ensure(); },
-    place(){ osc('triangle', 440, 0.09, 0.18); },
-    rotate(){ osc('square', 620, 0.06, 0.12); },
-    miss(){ osc('sine', 820, 0.07, 0.12); },
-    hit(){ sweep('sawtooth', 700, 220, 0.16, 0.28); },
-    sunk(){ sweep('square', 600, 200, 0.20, 0.30); setTimeout(()=>sweep('square', 500, 160, 0.22, 0.26), 70); },
-    win(){ osc('sine', 660, 0.12, 0.18); setTimeout(()=>osc('sine', 880, 0.14, 0.18), 120); },
-    lose(){ sweep('sawtooth', 300, 120, 0.35, 0.28); },
+    toggle(on){ enabled=on; if(on) ensure(); },
+    place(){ osc('triangle',440,0.09,0.18); },
+    rotate(){ osc('square',620,0.06,0.12); },
+    miss(){ osc('sine',820,0.07,0.12); },
+    hit(){ sweep('sawtooth',700,220,0.16,0.28); },
+    sunk(){ sweep('square',600,200,0.20,0.30); setTimeout(()=>sweep('square',500,160,0.22,0.26),70); },
+    win(){ osc('sine',660,0.12,0.18); setTimeout(()=>osc('sine',880,0.14,0.18),120); },
+    lose(){ sweep('sawtooth',300,120,0.35,0.28); },
   };
 })();
 
@@ -86,7 +85,7 @@ function hapticPulse(intensity=0.5, duration=60) {
   }
 }
 
-// ---------- Multiplayer-Client + Commit/Reveal ----------
+// ---------- Multiplayer + Commit/Reveal + Resync ----------
 let mp = null;
 let mpActive = false;
 let mpRole = null;             // 'host' | 'guest'
@@ -97,7 +96,15 @@ let mpPendingShot = null;      // {i,j}
 // Commit/Reveal
 let mpMyCommit = null;         // { salt, layout, hash }
 let mpPeerCommitHash = null;   // string
-let mpPeerVerified = null;     // true | false | null (noch nicht geprüft)
+let mpPeerVerified = null;     // true | false | null
+
+// Rejoin/Resync
+let mpIsFresh = false;         // dieser Client hat gerade (neu) verbunden
+let mpPeerNewlyJoined = false; // wir laufen schon, Peer kommt neu rein
+
+// Shot-Historie (für Resync-Snapshot)
+const mpHist = { myShots: [], peerShots: [] }; // myShots = von mir auf Gegner; peerShots = vom Gegner auf mich
+const rendered = { my: new Set(), peer: new Set() }; // dedup Keys "i,j"
 
 // ---------- Setup ----------
 init();
@@ -180,6 +187,10 @@ function newGame() {
 
   mpMyReady = false; mpPeerReady = false; mpPendingShot = null;
   mpMyCommit = null; mpPeerCommitHash = null; mpPeerVerified = null;
+
+  mpIsFresh = false; mpPeerNewlyJoined = false;
+  mpHist.myShots = []; mpHist.peerShots = [];
+  rendered.my.clear(); rendered.peer.clear();
 }
 
 function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
@@ -349,7 +360,7 @@ async function onSelect(){
 
       if (res.placedAll) {
         if (mpActive) {
-          // --- COMMIT: Hash senden (ohne Reveal) ---
+          // COMMIT: Hash senden (ohne Reveal)
           mpMyCommit = await buildCommit(game.player.board);
           mp?.send({ type: 'commit', hash: mpMyCommit.hash });
           mpMyReady = true;
@@ -394,9 +405,7 @@ async function onSelect(){
       }
 
       const isHit = (res.result === 'hit' || res.result === 'sunk');
-      boardAI.addShotMarker(lastHoverCell.i, lastHoverCell.j, isHit);
-      if (isHit) { SFX.hit(); hapticPulse(0.7, 120); spawnBurst(boardAI, lastHoverCell.i, lastHoverCell.j); }
-      else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardAI, lastHoverCell.i, lastHoverCell.j); }
+      markMyShot(lastHoverCell.i, lastHoverCell.j, isHit, false);
 
       if (res.result === 'hit') {
         setHUD(`Treffer (${lastHoverCell.i},${lastHoverCell.j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER' : ''}`);
@@ -414,10 +423,7 @@ async function onSelect(){
         const k = game.aiShootRandom();
         if (k && k.ok) {
           const aiHit = (k.result === 'hit' || k.result === 'sunk');
-          boardPlayer.addShotMarker(k.cell.i, k.cell.j, aiHit);
-
-          if (aiHit) { SFX.hit(); hapticPulse(0.6, 120); spawnBurst(boardPlayer, k.cell.i, k.cell.j); }
-          else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardPlayer, k.cell.i, k.cell.j); }
+          markPeerShot(k.cell.i, k.cell.j, aiHit, false);
 
           if (k.result === 'hit') setHUD(`KI: Treffer (${k.cell.i},${k.cell.j})${k.sunk ? ' — versenkt!' : ''}${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
           else if (k.result === 'sunk') { setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`); SFX.sunk(); }
@@ -445,6 +451,8 @@ async function startMP(asHost) {
   if (!room) { mpStatus.textContent = 'Bitte Raumcode setzen.'; return; }
 
   mp = new MPClient();
+  mpIsFresh = true;            // wir sind der frisch verbundene Client
+
   mpStatus.textContent = 'Verbinde...';
 
   mp.addEventListener('joined', (e) => {
@@ -453,11 +461,25 @@ async function startMP(asHost) {
   });
   mp.addEventListener('dc_open', () => {
     mpActive = true; mpLeaveBtn.disabled = false;
+
+    // Handshake: Frischer Client fragt nach Snapshot, „alter“ Client sendet proaktiv beim Peer-Join
+    if (mpIsFresh) {
+      mp?.send({ type: 'syncRequest' });
+    } else if (mpPeerNewlyJoined) {
+      setTimeout(()=> sendSyncState(), 200);
+      mpPeerNewlyJoined = false;
+    }
+
     mpStatus.textContent = `MP aktiv (Raum ${room}) — ${mpRole === 'host' ? 'Du startest nach „Bereit“' : 'Gegner startet'}`;
   });
   mp.addEventListener('dc_close', () => {
     mpActive = false;
     mpStatus.textContent = 'DataChannel geschlossen.';
+  });
+  mp.addEventListener('peer_joined', () => {
+    // Peer kam neu rein (WS-Ebene); sobald DC offen ist, Snapshot senden
+    mpPeerNewlyJoined = true;
+    mpStatus.textContent = 'Peer beigetreten — synchronisiere gleich...';
   });
   mp.addEventListener('peer_left', () => {
     mpStatus.textContent = 'Gegner hat verlassen.';
@@ -477,45 +499,53 @@ function stopMP() {
   mp?.disconnect();
   mpActive = false; mpRole = null; mpMyReady = false; mpPeerReady = false; mpPendingShot = null;
   mpMyCommit = null; mpPeerCommitHash = null; mpPeerVerified = null;
+  mpIsFresh = false; mpPeerNewlyJoined = false;
+  mpHist.myShots = []; mpHist.peerShots = [];
+  rendered.my.clear(); rendered.peer.clear();
   mpStatus.textContent = 'Offline';
   mpLeaveBtn.disabled = true;
 }
 
 async function onMPMessage(msg) {
   switch (msg.type) {
-    case 'placeReady': {
-      mpPeerReady = true; tryStartMPGame(); break;
-    }
+    case 'placeReady': { mpPeerReady = true; tryStartMPGame(); break; }
 
     case 'commit': {
-      // Peer schickt seinen Hash
       mpPeerCommitHash = msg.hash;
       mpStatus.textContent = `Commit empfangen (${msg.hash.slice(0,8)}…). ${mpMyCommit ? 'Warte auf Start…' : 'Platziere deine Flotte.'}`;
       tryStartMPGame();
       break;
     }
 
+    // --- Rejoin/Resync ---
+    case 'syncRequest': {
+      // Sende Snapshot unseres aktuellen Zustands
+      sendSyncState();
+      break;
+    }
+    case 'syncState': {
+      applySyncState(msg.snapshot);
+      mpIsFresh = false;
+      break;
+    }
+
+    // --- Gameplay ---
     case 'shot': {
-      // Gegner schießt auf unser Brett
       if (!boardPlayer) return;
       const { i, j } = msg.cell;
       const res = game.player.board.shoot(i, j);
       const isHit = (res.result === 'hit' || res.result === 'sunk');
-      boardPlayer.addShotMarker(i, j, isHit);
 
-      if (isHit) { SFX.hit(); hapticPulse(0.6, 120); spawnBurst(boardPlayer, i, j); }
-      else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardPlayer, i, j); }
+      markPeerShot(i, j, isHit, false);
+      // Ergebnis zurück
+      mp?.send({ type: 'shotResult', cell: { i, j }, result: res.result, sunk: !!res.sunk, gameOver: !!res.gameOver });
 
       if (res.result === 'hit') setHUD(`Gegner: Treffer (${i},${j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER (du verlierst)' : ''}`);
       else if (res.result === 'sunk') { setHUD(`Gegner: versenkt (${i},${j})${res.gameOver ? ' — GAME OVER (du verlierst)' : ''}`); SFX.sunk(); }
       else if (res.result === 'miss') setHUD(`Gegner: Wasser (${i},${j}). Dein Zug.`);
 
-      // Ergebnis zurück
-      mp?.send({ type: 'shotResult', cell: { i, j }, result: res.result, sunk: !!res.sunk, gameOver: !!res.gameOver });
-
       if (res.gameOver) {
         showOverlay(false); SFX.lose();
-        // Unser Reveal schicken (Layout+Salt)
         if (mpMyCommit) mp?.send({ type: 'reveal', salt: mpMyCommit.salt, layout: mpMyCommit.layout });
       } else {
         game.phase = PHASE.PLAYER_TURN;
@@ -527,20 +557,16 @@ async function onMPMessage(msg) {
       if (!mpPendingShot) return;
       const { i, j } = msg.cell;
       const isHit = (msg.result === 'hit' || msg.result === 'sunk');
-      boardAI.addShotMarker(i, j, isHit);
 
-      if (isHit) { SFX.hit(); hapticPulse(0.7, 120); spawnBurst(boardAI, i, j); }
-      else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardAI, i, j); }
+      markMyShot(i, j, isHit, false);
+      mpPendingShot = null;
 
       if (msg.result === 'hit') setHUD(`Treffer (${i},${j})${msg.sunk ? ' — versenkt!' : ''}${msg.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
       else if (msg.result === 'sunk') { setHUD(`Schiff versenkt (${i},${j})${msg.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`); SFX.sunk(); hapticPulse(0.9, 200); }
       else if (msg.result === 'miss') setHUD(`Wasser (${i},${j}) — Gegner ist dran...`);
 
-      mpPendingShot = null;
-
       if (msg.gameOver) {
         showOverlay(true); SFX.win();
-        // Unser Reveal schicken (auch als Gewinner – fair play)
         if (mpMyCommit) mp?.send({ type: 'reveal', salt: mpMyCommit.salt, layout: mpMyCommit.layout });
       } else {
         game.phase = PHASE.AI_TURN;
@@ -548,8 +574,8 @@ async function onMPMessage(msg) {
       break;
     }
 
+    // --- Reveal/Verify ---
     case 'reveal': {
-      // Peer offenbart salt+layout → wir verifizieren gegen mpPeerCommitHash
       const calc = await sha256Hex(`${msg.salt}|${msg.layout}`);
       const ok = (calc === mpPeerCommitHash);
       mpPeerVerified = ok;
@@ -575,6 +601,61 @@ function tryStartMPGame() {
     game.phase = PHASE.AI_TURN;
     setHUD('Beide bereit. **Gegner beginnt.** Bitte warten…');
   }
+}
+
+// ---------- Snapshot-Helpers ----------
+function sendSyncState() {
+  const snapshot = buildSyncState();
+  mp?.send({ type: 'syncState', snapshot });
+  mpStatus.textContent = 'Snapshot gesendet.';
+}
+
+function buildSyncState() {
+  return {
+    v: 1,
+    role: mpRole,
+    phase: game.phase,                // aus Sicht des Senders
+    myReady: mpMyReady,
+    peerReady: mpPeerReady,
+    myCommitHash: mpMyCommit?.hash || null,
+    peerCommitHash: mpPeerCommitHash || null,
+    myShots: mpHist.myShots.slice(),  // {i,j,result,sunk}
+    peerShots: mpHist.peerShots.slice(),
+    pendingShot: mpPendingShot ? { ...mpPendingShot } : null,
+    peerVerified: mpPeerVerified,
+  };
+}
+
+function applySyncState(snap) {
+  // Phase übersetzen: „PLAYER_TURN“ (Sender) = bei uns „AI_TURN“
+  let mappedPhase = PHASE.PLAYER_TURN;
+  if (snap.phase === PHASE.PLAYER_TURN) mappedPhase = PHASE.AI_TURN;
+  else if (snap.phase === PHASE.AI_TURN) mappedPhase = PHASE.PLAYER_TURN;
+  else mappedPhase = snap.phase; // PLACE_PLAYER/GAME_OVER theoretisch nicht im MP-Spielbetrieb
+
+  // Commit/Ready übernehmen (aus Sicht des Peers)
+  mpPeerReady = !!snap.myReady;
+  if (typeof snap.myCommitHash === 'string') mpPeerCommitHash = snap.myCommitHash;
+
+  // Historie zeichnen (idempotent, ohne SFX/Haptik)
+  // 1) Shots des Peers (auf UNS) ⇒ Marker auf boardPlayer
+  for (const s of (snap.myShots || [])) {
+    markPeerShot(s.i, s.j, s.result === 'hit' || s.result === 'sunk', true);
+  }
+  // 2) Shots von uns (die der Peer gespeichert hat) ⇒ Marker auf boardAI
+  for (const s of (snap.peerShots || [])) {
+    markMyShot(s.i, s.j, s.result === 'hit' || s.result === 'sunk', true);
+  }
+
+  // Pending-Edgecases ignorieren (vereinfachen): Turn aus Phase
+  game.phase = mappedPhase;
+
+  // UI
+  const who =
+    game.phase === PHASE.PLAYER_TURN ? 'Du bist dran.' :
+    game.phase === PHASE.AI_TURN ? 'Gegner ist dran…' : `${game.phase}`;
+  setHUD(`Resync fertig. ${who}`);
+  mpStatus.textContent = 'Snapshot angewendet.';
 }
 
 // ---------- Commit-Helfer ----------
@@ -702,6 +783,40 @@ function spawnBurst(board, i, j) {
   }
   let t = 0;
   effects.push({ mesh: group, update: (dt) => { t += dt; for (const p of parts) { p.m.position.x += p.vx*dt; p.m.position.z += p.vz*dt; p.vx*=0.92; p.vz*=0.92; p.m.material.opacity*=0.92; p.m.scale.multiplyScalar(0.98); } if (t>0.35){ board.remove(group); return false; } return true; } });
+}
+
+// ---------- Marker/Historie Helpers ----------
+function shotKey(i,j){ return `${i},${j}`; }
+
+function markMyShot(i, j, hit, silent=false) {
+  const key = shotKey(i,j);
+  if (!rendered.my.has(key)) {
+    boardAI?.addShotMarker(i, j, hit);
+    rendered.my.add(key);
+  }
+  // Historie (idempotent)
+  if (!mpHist.myShots.some(s => s.i===i && s.j===j)) {
+    mpHist.myShots.push({ i, j, result: hit ? 'hit' : 'miss', sunk: false });
+  }
+  if (!silent) {
+    if (hit) { SFX.hit(); hapticPulse(0.7, 120); spawnBurst(boardAI, i, j); }
+    else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardAI, i, j); }
+  }
+}
+
+function markPeerShot(i, j, hit, silent=false) {
+  const key = shotKey(i,j);
+  if (!rendered.peer.has(key)) {
+    boardPlayer?.addShotMarker(i, j, hit);
+    rendered.peer.add(key);
+  }
+  if (!mpHist.peerShots.some(s => s.i===i && s.j===j)) {
+    mpHist.peerShots.push({ i, j, result: hit ? 'hit' : 'miss', sunk: false });
+  }
+  if (!silent) {
+    if (hit) { SFX.hit(); hapticPulse(0.6, 120); spawnBurst(boardPlayer, i, j); }
+    else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardPlayer, i, j); }
+  }
 }
 
 // ---------- HUD ----------
