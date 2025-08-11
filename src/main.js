@@ -1,24 +1,26 @@
-// [BATTLESHIP_AR:STEP 2 FIX] AR Boot + Hit-Test + Board + Robustes Ray-Picking (Controller 0/1 + Fallback Gaze)
+// [BATTLESHIP_AR:STEP 2 FIX v2] Stabiler XR-Ray (Quaternion), Caching der Hover-Zelle, robustes Select
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
 
 let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
-let board = null;
 let referenceSpace = null;
+let board = null;
 
 const controllers = [];
 const raycaster = new THREE.Raycaster();
-const tempMatrix = new THREE.Matrix4();
+
+let lastHoverCell = null;
+let lastIntersectPoint = null;
 
 let debugRay = null;
+let debugDot = null;
 
 init();
 animate();
 
 async function init() {
-  // Szene & Renderer
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
@@ -38,28 +40,27 @@ async function init() {
   reticle.visible = false;
   scene.add(reticle);
 
-  // Controller 0 & 1 einrichten
+  // Controller 0 & 1
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
     c.userData.index = i;
+    c.addEventListener('connected', (e) => { c.userData.inputSource = e.data; });
+    c.addEventListener('disconnected', () => { delete c.userData.inputSource; });
     c.addEventListener('select', onSelect);
-    c.addEventListener('connected', (e) => {
-      // Merke InputSource (wichtig für AR targetRaySpace)
-      c.userData.inputSource = e.data;
-    });
-    c.addEventListener('disconnected', () => {
-      delete c.userData.inputSource;
-    });
     scene.add(c);
     controllers.push(c);
   }
 
-  // Debug-Ray (sichtbarer Strahl)
+  // Debug-Ray (sichtbare Linie)
   const rayGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,0,-0.8)]);
-  const rayMat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.6 });
-  debugRay = new THREE.Line(rayGeom, rayMat);
-  debugRay.visible = false; // schalte auf true, wenn du dauerhaft sehen willst
+  debugRay = new THREE.Line(rayGeom, new THREE.LineBasicMaterial({ transparent:true, opacity:0.7 }));
+  debugRay.visible = true; // auf false stellen, wenn es stört
   scene.add(debugRay);
+
+  // Debug-Dot für Intersection
+  debugDot = new THREE.Mesh(new THREE.SphereGeometry(0.01, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
+  debugDot.visible = false;
+  scene.add(debugDot);
 
   // AR-Button
   const btn = ARButton.createButton(renderer, {
@@ -98,12 +99,11 @@ function animate() {
 }
 
 function render(timestamp, frame) {
-  // Hit-Test für Retikel, solange kein Board platziert ist
+  // Hit-Test/Retikel solange kein Board
   if (frame && hitTestSource && !board) {
-    const hitTestResults = frame.getHitTestResults(hitTestSource);
-    if (hitTestResults && hitTestResults.length > 0) {
-      const hit = hitTestResults[0];
-      const pose = hit.getPose(renderer.xr.getReferenceSpace());
+    const hits = frame.getHitTestResults(hitTestSource);
+    if (hits && hits.length > 0) {
+      const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
       if (pose) {
         reticle.visible = true;
         reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
@@ -115,27 +115,35 @@ function render(timestamp, frame) {
     }
   }
 
-  // Picking nur wenn Board existiert
+  // Hover/Intersection nur wenn Board existiert
   if (board && referenceSpace && frame) {
-    // Baue Ray aus aktivem Controller (tracked-pointer) oder fallback Gaze
-    const { origin, direction, from } = getXRRay(frame);
+    const ray = getXRRay(frame); // {origin, direction}
+    if (ray) {
+      raycaster.set(ray.origin, ray.direction);
 
-    if (origin && direction) {
-      raycaster.set(origin, direction);
+      // Debug-Ray aktualisieren
+      updateDebugRay(ray.origin, ray.direction);
 
-      // Debug-Ray visualisieren
-      updateDebugRay(origin, direction);
-
-      const intersects = raycaster.intersectObject(board.pickingPlane, false);
-      if (intersects.length > 0) {
-        const p = intersects[0].point;
-        const cell = board.worldToCell(p);
-        board.setHoverCell(cell);
+      const hit = raycaster.intersectObject(board.pickingPlane, false)[0];
+      if (hit) {
+        lastIntersectPoint = hit.point;
+        const cell = board.worldToCell(hit.point);
+        lastHoverCell = cell || null;
+        board.setHoverCell(lastHoverCell);
+        // Debug-Dot
+        debugDot.position.copy(hit.point);
+        debugDot.visible = true;
       } else {
+        lastIntersectPoint = null;
+        lastHoverCell = null;
         board.setHoverCell(null);
+        debugDot.visible = false;
       }
     } else {
+      lastIntersectPoint = null;
+      lastHoverCell = null;
       board.setHoverCell(null);
+      debugDot.visible = false;
       debugRay.visible = false;
     }
   }
@@ -143,34 +151,44 @@ function render(timestamp, frame) {
   renderer.render(scene, camera);
 }
 
-// Liefert Ray aus XRInputSource (tracked-pointer Controller bevorzugt), sonst Gaze (Kamera-Vorwärts)
+// XR-Ray robust aus InputSource-Quaternion oder Fallback Kamera
 function getXRRay(frame) {
   const session = renderer.xr.getSession();
-  if (!session || !referenceSpace) return { origin: null, direction: null, from: null };
+  if (!session || !referenceSpace) return null;
 
-  // 1) Versuche "tracked-pointer" Controller (0/1)
+  // 1) Bevorzuge Controller mit tracked-pointer ODER screen
   for (const c of controllers) {
     const src = c.userData.inputSource;
     if (!src) continue;
-    if (src.targetRayMode === 'tracked-pointer') {
-      const pose = frame.getPose(src.targetRaySpace, referenceSpace);
-      if (pose) {
-        const o = new THREE.Vector3(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
-        const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-        const dir = new THREE.Vector3(0, 0, -1).applyMatrix4(m).sub(o).normalize();
-        return { origin: o, direction: dir, from: 'controller' };
-      }
+
+    const space = src.targetRaySpace;
+    const pose = frame.getPose(space, referenceSpace);
+    if (pose) {
+      const { position, orientation } = pose.transform;
+      const origin = new THREE.Vector3(position.x, position.y, position.z);
+      // Richtung = -Z, rotiert durch Orientierung
+      const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+      const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
+      return { origin, direction };
     }
   }
 
-  // 2) Fallback: „screen“/Gaze – nutze Kamera-Vorwärtsvektor
+  // 2) Fallback: Kamera-Vorwärts (Gaze)
   const cam = renderer.xr.getCamera(camera);
-  const o = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
-  const dir = new THREE.Vector3(0, 0, -1).applyMatrix4(new THREE.Matrix4().extractRotation(cam.matrixWorld)).normalize();
-  return { origin: o, direction: dir, from: 'gaze' };
+  const origin = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+  const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(new THREE.Matrix4().extractRotation(cam.matrixWorld)).normalize();
+  return { origin, direction };
 }
 
-// Trigger: Platzieren ODER Zelle toggeln
+function updateDebugRay(origin, direction) {
+  const arr = debugRay.geometry.attributes.position.array;
+  arr[0] = origin.x; arr[1] = origin.y; arr[2] = origin.z;
+  const end = new THREE.Vector3().copy(direction).multiplyScalar(0.9).add(origin);
+  arr[3] = end.x; arr[4] = end.y; arr[5] = end.z;
+  debugRay.geometry.attributes.position.needsUpdate = true;
+  debugRay.visible = true;
+}
+
 function onSelect() {
   // 1) Board platzieren
   if (!board && reticle.visible) {
@@ -178,43 +196,17 @@ function onSelect() {
     board.position.copy(reticle.position);
     board.quaternion.copy(reticle.quaternion);
     scene.add(board);
-
-    setHUD('Brett platziert. Zielen & Trigger: Zelle markieren/entfernen.');
+    setHUD('Brett platziert. Ziele auf eine Zelle und drücke Trigger, um zu toggeln.');
     return;
   }
 
-  // 2) Zelle toggeln
-  if (board) {
-    // Nutze den letzten berechneten Ray im Render-Loop erneut
-    const session = renderer.xr.getSession();
-    const frame = renderer.xr.getFrame?.();
-    if (!session || !frame || !referenceSpace) return;
-
-    const { origin, direction } = getXRRay(frame);
-    if (!origin || !direction) return;
-
-    raycaster.set(origin, direction);
-    const intersects = raycaster.intersectObject(board.pickingPlane, false);
-    if (intersects.length > 0) {
-      const p = intersects[0].point;
-      const cell = board.worldToCell(p);
-      if (cell) {
-        const added = board.toggleMarker(cell);
-        setHUD(added ? `Markiert: (${cell.i}, ${cell.j})` : `Entfernt: (${cell.i}, ${cell.j})`);
-      }
-    }
+  // 2) Zelle toggeln – benutze die im Render-Loop berechnete Hover-Zelle
+  if (board && lastHoverCell) {
+    const added = board.toggleMarker(lastHoverCell);
+    setHUD(added
+      ? `Markiert: (${lastHoverCell.i}, ${lastHoverCell.j})`
+      : `Entfernt: (${lastHoverCell.i}, ${lastHoverCell.j})`);
   }
-}
-
-function updateDebugRay(origin, direction) {
-  if (!debugRay) return;
-  const pts = debugRay.geometry.attributes.position.array;
-  pts[0] = origin.x; pts[1] = origin.y; pts[2] = origin.z;
-  const end = new THREE.Vector3().copy(direction).multiplyScalar(0.8).add(origin);
-  pts[3] = end.x; pts[4] = end.y; pts[5] = end.z;
-  debugRay.geometry.attributes.position.needsUpdate = true;
-  // Stelle sichtbar – schalte auf false, wenn es dich stört
-  debugRay.visible = true;
 }
 
 function setHUD(text) {
