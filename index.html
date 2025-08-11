@@ -2,24 +2,26 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>AR Battleship – Schritt 7</title>
+  <title>AR Battleship – Schritt 9</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; }
     #hud {
-      position: fixed; left: 12px; bottom: 12px; right: 140px;
+      position: fixed; left: 12px; bottom: 12px; right: 200px;
       font: 14px/1.4 system-ui, sans-serif; color: #fff;
       background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 10px;
       pointer-events: none; user-select: none;
     }
     .small { opacity: .85; font-size: 12px; }
 
-    #btnReset {
-      position: fixed; bottom: 12px; right: 12px;
+    .btn {
+      position: fixed; bottom: 12px;
       font: 14px system-ui, sans-serif; color: #111;
       background: #00ffc8; border: 0; border-radius: 10px; padding: 10px 14px;
       cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,.25);
     }
+    #btnAudio { right: 152px; background:#ffd54f; }
+    #btnReset { right: 12px; }
 
     /* Game Over Overlay */
     #overlay {
@@ -40,10 +42,12 @@
 </head>
 <body>
   <div id="hud">
-    <div><strong>AR Battleship</strong> — Schritt 7</div>
-    <div class="small">Platziere beide Bretter per Trigger. Dann: Flotte setzen (Y/B drehen). Schieße auf das rechte Brett.</div>
+    <div><strong>AR Battleship</strong> — Schritt 9</div>
+    <div class="small">Platziere Bretter per Trigger. Flotte setzen (Y/B drehen). Schieße auf das rechte Brett.</div>
   </div>
-  <button id="btnReset" type="button">Neustart</button>
+
+  <button id="btnAudio" class="btn" type="button">🔊 SFX an</button>
+  <button id="btnReset" class="btn" type="button">Neustart</button>
 
   <!-- Game Over Overlay -->
   <div id="overlay">

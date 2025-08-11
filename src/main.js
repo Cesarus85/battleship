@@ -1,4 +1,4 @@
-// [BATTLESHIP_AR:STEP 7] Labels (DU/GEGNER), Reset, Game-Over-Overlay, Debug aus
+// [BATTLESHIP_AR:STEP 9] SFX, Haptik & Mini-Effekte (Ripple/Burst)
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
@@ -29,6 +29,7 @@ const overlayTitle = document.getElementById('overlayTitle');
 const overlayMsg = document.getElementById('overlayMsg');
 const btnAgain = document.getElementById('btnAgain');
 const btnReset = document.getElementById('btnReset');
+const btnAudio = document.getElementById('btnAudio');
 
 // Board-Labels (Sprites)
 let labelPlayer = null;
@@ -38,6 +39,83 @@ const prevButtons = new Map();
 const IDX = { BY: 4 }; // Y/B zum Drehen
 const BOARD_GAP = 1.2;
 
+// ---------- Zeit & Effekte ----------
+let clock = new THREE.Clock();
+let effects = []; // {mesh, update:(dt)=>boolean}
+
+// ---------- SFX & Haptik ----------
+const SFX = (() => {
+  let ctx = null;
+  let enabled = false; // per Button einschalten
+  function ensure() {
+    if (!enabled) return false;
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') ctx.resume();
+    return true;
+  }
+  function env(gainNode, t0, a=0.005, d=0.12, r=0.06, peak=0.8, sustain=0.0) {
+    const g = gainNode.gain;
+    g.cancelScheduledValues(t0);
+    g.setValueAtTime(0.0001, t0);
+    g.linearRampToValueAtTime(peak, t0 + a);
+    g.linearRampToValueAtTime(sustain, t0 + a + d);
+    g.linearRampToValueAtTime(0.0001, t0 + a + d + r);
+  }
+  function osc(type, freq, dur, vol=0.2) {
+    if (!ensure()) return;
+    const t0 = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    env(g, t0, 0.004, dur*0.6, dur*0.4, vol, 0.0001);
+    o.connect(g).connect(ctx.destination);
+    o.start(t0); o.stop(t0 + Math.max(0.02, dur));
+  }
+  function sweep(type, f0, f1, dur=0.18, vol=0.25) {
+    if (!ensure()) return;
+    const t0 = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, t0);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+    env(g, t0, 0.005, dur*0.7, dur*0.3, vol, 0.0001);
+    o.connect(g).connect(ctx.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  return {
+    toggle(on) { enabled = on; if (on) ensure(); },
+    place() { osc('triangle', 440, 0.09, 0.18); },
+    rotate() { osc('square', 620, 0.06, 0.12); },
+    miss() { osc('sine', 820, 0.07, 0.12); },
+    hit() { sweep('sawtooth', 700, 220, 0.16, 0.28); },
+    sunk() { sweep('square', 600, 200, 0.20, 0.30); setTimeout(()=>sweep('square', 500, 160, 0.22, 0.26), 70); },
+    win() { osc('sine', 660, 0.12, 0.18); setTimeout(()=>osc('sine', 880, 0.14, 0.18), 120); },
+    lose() { sweep('sawtooth', 300, 120, 0.35, 0.28); },
+  };
+})();
+
+function hapticPulse(intensity=0.5, duration=60) {
+  // Pulse auf allen Controllern, wenn möglich
+  for (const c of controllers) {
+    const gp = c?.userData?.inputSource?.gamepad;
+    if (!gp) continue;
+    // WebXR Gamepad v1
+    const acts = gp.hapticActuators || [];
+    for (const h of acts) {
+      try { h.pulse?.(intensity, duration); } catch {}
+    }
+    // Chrome’s vibrationActuator
+    if (gp.vibrationActuator?.playEffect) {
+      try {
+        gp.vibrationActuator.playEffect('dual-rumble', {
+          startDelay: 0, duration, weakMagnitude: intensity, strongMagnitude: intensity
+        });
+      } catch {}
+    }
+  }
+}
+
+// ---------- Setup ----------
 init();
 animate();
 
@@ -93,8 +171,15 @@ async function init() {
   renderer.xr.addEventListener('sessionend', onSessionEnd);
 
   // UI-Events
-  btnReset?.addEventListener('click', () => resetGame());
+  btnReset?.addEventListener('click', () => { resetGame(); });
   btnAgain?.addEventListener('click', () => { hideOverlay(); resetGame(); });
+  btnAudio?.addEventListener('click', () => {
+    const on = btnAudio.textContent.includes('an') ? true : false;
+    SFX.toggle(on);
+    btnAudio.textContent = on ? '🔇 SFX aus' : '🔊 SFX an';
+    // kleines Feedback zur Aktivierung
+    if (on) { SFX.place(); hapticPulse(0.2, 40); }
+  });
 
   // GameState
   newGame();
@@ -103,8 +188,9 @@ async function init() {
 
 function newGame() {
   game = new GameState();
-  // Aufräumen falls vorher etwas da war
   clearBoardsAndLabels();
+  effects = [];
+  clock.start();
 }
 
 function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
@@ -120,6 +206,8 @@ function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=nu
 function animate(){ renderer.setAnimationLoop(render); }
 
 function render(_, frame) {
+  const dt = clock.getDelta();
+
   // Hit-Test solange keine Boards
   if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
@@ -175,7 +263,12 @@ function render(_, frame) {
     boardPlayer?.clearGhost();
   }
 
-  // Labels (Sprites) brauchen keine lookAt, sie sind Sprites: sie „billboarden“ automatisch
+  // Effekte updaten
+  if (effects.length) {
+    effects = effects.filter((fx) => {
+      try { return fx.update(dt) !== false; } catch { return false; }
+    });
+  }
 
   renderer.render(scene, camera);
 }
@@ -194,8 +287,7 @@ function applyHover(target, hit) {
     lastHoverTarget = target;
     lastHoverCell = cell;
     if (target === 'ai') boardAI.setHoverCell(cell); // nur auf Gegnerbrett Highlight
-    debugDot.position.copy(hit.point);
-    debugDot.visible = false; // Debug-Punkt ist standardmäßig aus
+    debugDot.visible = false; // Debug-Punkt bleibt aus
   } else {
     debugDot.visible = false;
   }
@@ -256,22 +348,27 @@ function onSelect(){
 
     game.beginPlacement();
     setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
+    // AudioContext sicher "wecken"
+    SFX.toggle(btnAudio?.textContent.includes('an'));
     return;
   }
 
-  // 2) Spieler-Schiffe setzen (nur auf Spielerbrett wirksam)
+  // 2) Spieler-Schiffe setzen (nur auf Spielerbrett)
   if (boardPlayer && game.phase === PHASE.PLACE_PLAYER && lastHoverCell && lastHoverTarget === 'player') {
     const type = game.player.fleet[game.player.nextShipIndex];
     if (!type) return;
 
     const ok = game.player.board.canPlaceShip(lastHoverCell.i, lastHoverCell.j, type.length, game.player.orientation);
-    if (!ok) { setHUD(`Phase: ${game.phase} — Ungültig. Drehe (Y/B) oder andere Zelle.`); return; }
+    if (!ok) { setHUD(`Phase: ${game.phase} — Ungültig. Drehe (Y/B) oder andere Zelle.`); SFX.miss(); hapticPulse(0.2, 40); return; }
 
     const res = game.tryPlaceNextPlayerShip(lastHoverCell.i, lastHoverCell.j);
     if (res.ok) {
       const cells = boardPlayer.cellsForShip(lastHoverCell, type.length, game.player.orientation);
       boardPlayer.placeShipVisual(cells);
       boardPlayer.clearGhost();
+      SFX.place(); hapticPulse(0.35, 60);
+      // kleinem grünen Ripple an der Startzelle
+      spawnRipple(boardPlayer, cells[0].i, cells[0].j, 0x22ffaa, 0.9, 0.55);
 
       if (res.placedAll) {
         const ar = game.aiPlaceFleetRandom();
@@ -283,6 +380,7 @@ function onSelect(){
       }
     } else {
       setHUD(`Phase: ${game.phase} — Position ungültig.`);
+      SFX.miss(); hapticPulse(0.2, 40);
     }
     return;
   }
@@ -293,26 +391,36 @@ function onSelect(){
     if (!res.ok) {
       if (res.result === 'repeat') setHUD('Bereits beschossen. Andere Zelle wählen.');
       else setHUD('Ungültiger Schuss.');
+      SFX.miss(); hapticPulse(0.15, 40);
       return;
     }
 
-    boardAI.addShotMarker(lastHoverCell.i, lastHoverCell.j, res.result === 'hit' || res.result === 'sunk');
+    const isHit = (res.result === 'hit' || res.result === 'sunk');
+    boardAI.addShotMarker(lastHoverCell.i, lastHoverCell.j, isHit);
+    if (isHit) { SFX.hit(); hapticPulse(0.7, 120); spawnBurst(boardAI, lastHoverCell.i, lastHoverCell.j); }
+    else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardAI, lastHoverCell.i, lastHoverCell.j); }
+
     if (res.result === 'hit') setHUD(`Treffer (${lastHoverCell.i},${lastHoverCell.j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
-    else if (res.result === 'sunk') setHUD(`Schiff versenkt (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
+    else if (res.result === 'sunk') { setHUD(`Schiff versenkt (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`); SFX.sunk(); hapticPulse(0.9, 200); }
     else if (res.result === 'miss') setHUD(`Wasser (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
 
     // Game Over?
-    if (res.gameOver) { showOverlay(true); return; }
+    if (res.gameOver) { showOverlay(true); SFX.win(); return; }
 
     // KI-Gegenschuss
     if (game.phase === PHASE.AI_TURN) {
       const k = game.aiShootRandom();
       if (k && k.ok) {
-        boardPlayer.addShotMarker(k.cell.i, k.cell.j, k.result === 'hit' || k.result === 'sunk');
+        const aiHit = (k.result === 'hit' || k.result === 'sunk');
+        boardPlayer.addShotMarker(k.cell.i, k.cell.j, aiHit);
+        if (aiHit) { SFX.hit(); hapticPulse(0.6, 120); spawnBurst(boardPlayer, k.cell.i, k.cell.j); }
+        else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardPlayer, k.cell.i, k.cell.j); }
+
         if (k.result === 'hit') setHUD(`KI: Treffer (${k.cell.i},${k.cell.j})${k.sunk ? ' — versenkt!' : ''}${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
-        else if (k.result === 'sunk') setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
+        else if (k.result === 'sunk') { setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`); SFX.sunk(); }
         else if (k.result === 'miss') setHUD(`KI: Wasser (${k.cell.i},${k.cell.j}). Dein Zug.`);
-        if (k.gameOver) { showOverlay(false); }
+
+        if (k.gameOver) { showOverlay(false); SFX.lose(); }
       }
     }
   }
@@ -326,7 +434,7 @@ function pollRotateButtons(frame){
     let mask = 0; gp.buttons.forEach((b,i)=>{ if(b?.pressed) mask|=(1<<i); });
     const prev = prevButtons.get(c) ?? 0;
     const justBY = ((mask & (1<<IDX.BY)) && !(prev & (1<<IDX.BY)));
-    if (justBY) setHUD(`Phase: ${game.phase} — Ausrichtung: ${game.toggleOrientation()}`);
+    if (justBY) { setHUD(`Phase: ${game.phase} — Ausrichtung: ${game.toggleOrientation()}`); SFX.rotate(); hapticPulse(0.25, 40); }
     prevButtons.set(c, mask);
   }
 }
@@ -337,11 +445,9 @@ function updateDebugRay(origin, direction){
   const end = new THREE.Vector3().copy(direction).multiplyScalar(0.9).add(origin);
   arr[3]=end.x; arr[4]=end.y; arr[5]=end.z;
   debugRay.geometry.attributes.position.needsUpdate = true;
-  // debugRay.visible = true; // nur bei Bedarf!
 }
 
 // ---------- Labels / Overlay / Reset ----------
-
 function makeTextSprite(text, bg='#00ffc8', fg='#000') {
   const pad = 16;
   const canvas = document.createElement('canvas');
@@ -349,12 +455,10 @@ function makeTextSprite(text, bg='#00ffc8', fg='#000') {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  // Hintergrund (rounded)
   const r = 28;
   roundRect(ctx, pad, pad, canvas.width-2*pad, canvas.height-2*pad, r);
   ctx.fillStyle = bg; ctx.fill();
 
-  // Text
   ctx.fillStyle = fg;
   ctx.font = 'bold 96px system-ui, sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -364,10 +468,9 @@ function makeTextSprite(text, bg='#00ffc8', fg='#000') {
   tex.needsUpdate = true;
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(0.45, 0.22, 1); // Meter: Breite/Höhe
+  sprite.scale.set(0.45, 0.22, 1);
   return sprite;
 }
-
 function roundRect(ctx, x, y, w, h, r){
   const rr = Math.min(r, w/2, h/2);
   ctx.beginPath();
@@ -378,15 +481,12 @@ function roundRect(ctx, x, y, w, h, r){
   ctx.arcTo(x,   y,   x+w, y,   rr);
   ctx.closePath();
 }
-
 function placeLabelAboveBoard(sprite, board, boardQuat) {
-  // Position etwas "hinter" der oberen Kante, relativ zur Brett-Ausrichtung
-  const local = new THREE.Vector3(0, 0.08, -0.6 * 1.0); // y: Höhe, z: hintere Kante
+  const local = new THREE.Vector3(0, 0.08, -0.6);
   const world = local.clone().applyQuaternion(boardQuat).add(board.position);
   sprite.position.copy(world);
   scene.add(sprite);
 }
-
 function showOverlay(playerWon) {
   overlayTitle.textContent = playerWon ? '🎉 Du hast gewonnen!' : '💥 Du hast verloren';
   overlayMsg.textContent = playerWon
@@ -395,16 +495,12 @@ function showOverlay(playerWon) {
   overlay.style.display = 'flex';
 }
 function hideOverlay() { overlay.style.display = 'none'; }
-
 function resetGame() {
   hideOverlay();
-  // Scene cleanup
   clearBoardsAndLabels();
-  // State
   newGame();
   setHUD('Zurückgesetzt. Platziere die Bretter neu (Trigger).');
 }
-
 function clearBoardsAndLabels() {
   if (boardPlayer) scene.remove(boardPlayer);
   if (boardAI) scene.remove(boardAI);
@@ -415,4 +511,68 @@ function clearBoardsAndLabels() {
   lastHoverCell = null; lastHoverTarget = null;
 }
 
+// ---------- Mini-Effekte ----------
+function spawnRipple(board, i, j, color=0xffffff, startAlpha=0.9, life=0.6) {
+  const p = board.cellCenterLocal(i, j);
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(board.cellSize*0.05, board.cellSize*0.06, 32).rotateX(-Math.PI/2),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: startAlpha })
+  );
+  ring.position.set(p.x, 0.006, p.z);
+  board.add(ring);
+
+  const maxScale = 3.2; // wie weit die Welle wächst
+  let t = 0;
+  effects.push({
+    mesh: ring,
+    update: (dt) => {
+      t += dt;
+      const k = t / life;
+      ring.scale.setScalar(1 + k * maxScale);
+      ring.material.opacity = startAlpha * (1 - k);
+      if (k >= 1) { board.remove(ring); return false; }
+      return true;
+    }
+  });
+}
+
+function spawnBurst(board, i, j) {
+  const p = board.cellCenterLocal(i, j);
+  const group = new THREE.Group();
+  group.position.set(p.x, 0.008, p.z);
+  board.add(group);
+
+  const count = 10;
+  const parts = [];
+  for (let k = 0; k < count; k++) {
+    const m = new THREE.Mesh(
+      new THREE.CircleGeometry(board.cellSize*0.08, 10).rotateX(-Math.PI/2),
+      new THREE.MeshBasicMaterial({ color: 0xff5533, transparent: true, opacity: 0.95 })
+    );
+    m.position.set(0, 0, 0);
+    group.add(m);
+    const angle = (Math.PI*2) * (k / count) + Math.random()*0.5;
+    const speed = board.cellSize * (1.8 + Math.random()*0.8);
+    parts.push({ m, vx: Math.cos(angle)*speed, vz: Math.sin(angle)*speed, life: 0.28 + Math.random()*0.12 });
+  }
+
+  let t = 0;
+  effects.push({
+    mesh: group,
+    update: (dt) => {
+      t += dt;
+      for (const p of parts) {
+        p.m.position.x += p.vx * dt;
+        p.m.position.z += p.vz * dt;
+        p.vx *= 0.92; p.vz *= 0.92;
+        p.m.material.opacity *= 0.92;
+        p.m.scale.multiplyScalar(0.98);
+      }
+      if (t > 0.35) { board.remove(group); return false; }
+      return true;
+    }
+  });
+}
+
+// ---------- HUD ----------
 function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
