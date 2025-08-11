@@ -368,23 +368,68 @@ function onSelect(){
       return;
     }
 
-    // Singleplayer-Altpfad (AI) – nur falls kein MP aktiv
-    const res = game.playerShoot(lastHoverCell.i, lastHoverCell.j);
-    if (!res.ok) {
-      if (res.result === 'repeat') setHUD('Bereits beschossen. Andere Zelle wählen.');
-      else setHUD('Ungültiger Schuss.');
-      SFX.miss(); hapticPulse(0.15, 40);
-      return;
-    }
-    const isHit = (res.result === 'hit' || res.result === 'sunk');
-    boardAI.addShotMarker(lastHoverCell.i, lastHoverCell.j, isHit);
-    if (isHit) { SFX.hit(); hapticPulse(0.7, 120); spawnBurst(boardAI, lastHoverCell.i, lastHoverCell.j); }
-    else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardAI, lastHoverCell.i, lastHoverCell.j); }
-
-    if (res.result === 'hit') setHUD(`Treffer (${lastHoverCell.i},${lastHoverCell.j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER' : ''}`);
-    else if (res.result === 'sunk') { setHUD(`Schiff versenkt (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER' : ''}`); SFX.sunk(); hapticPulse(0.9, 200); }
-    else if (res.result === 'miss') setHUD(`Wasser (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
+// --- Singleplayer-Altpfad (AI) – nur falls kein Multiplayer aktiv ---
+{
+  const res = game.playerShoot(lastHoverCell.i, lastHoverCell.j);
+  if (!res.ok) {
+    if (res.result === 'repeat') setHUD('Bereits beschossen. Andere Zelle wählen.');
+    else setHUD('Ungültiger Schuss.');
+    SFX.miss(); hapticPulse(0.15, 40);
+    return;
   }
+
+  const isHit = (res.result === 'hit' || res.result === 'sunk');
+  boardAI.addShotMarker(lastHoverCell.i, lastHoverCell.j, isHit);
+  if (isHit) {
+    SFX.hit(); hapticPulse(0.7, 120);
+    spawnBurst(boardAI, lastHoverCell.i, lastHoverCell.j);
+  } else {
+    SFX.miss(); hapticPulse(0.2, 60);
+    spawnRipple(boardAI, lastHoverCell.i, lastHoverCell.j);
+  }
+
+  if (res.result === 'hit') {
+    setHUD(`Treffer (${lastHoverCell.i},${lastHoverCell.j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER' : ''}`);
+  } else if (res.result === 'sunk') {
+    setHUD(`Schiff versenkt (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER' : ''}`);
+    SFX.sunk(); hapticPulse(0.9, 200);
+  } else if (res.result === 'miss') {
+    setHUD(`Wasser (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
+  }
+
+  // Player hat gewonnen?
+  if (res.gameOver) { showOverlay(true); SFX.win(); return; }
+
+  // --- KI antwortet (nur wenn Spiel nicht vorbei) ---
+  if (game.phase === PHASE.AI_TURN) {
+    const k = game.aiShootRandom();
+    if (k && k.ok) {
+      const aiHit = (k.result === 'hit' || k.result === 'sunk');
+      boardPlayer.addShotMarker(k.cell.i, k.cell.j, aiHit);
+
+      if (aiHit) {
+        SFX.hit(); hapticPulse(0.6, 120);
+        spawnBurst(boardPlayer, k.cell.i, k.cell.j);
+      } else {
+        SFX.miss(); hapticPulse(0.2, 60);
+        spawnRipple(boardPlayer, k.cell.i, k.cell.j);
+      }
+
+      if (k.result === 'hit') {
+        setHUD(`KI: Treffer (${k.cell.i},${k.cell.j})${k.sunk ? ' — versenkt!' : ''}${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
+      } else if (k.result === 'sunk') {
+        setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
+        SFX.sunk();
+      } else if (k.result === 'miss') {
+        setHUD(`KI: Wasser (${k.cell.i},${k.cell.j}). Dein Zug.`);
+      }
+
+      if (k.gameOver) { showOverlay(false); SFX.lose(); }
+      else { game.phase = PHASE.PLAYER_TURN; } // wieder du dran
+    }
+  }
+}
+
 }
 
 // --- MP: host/join/leave & Events ---
