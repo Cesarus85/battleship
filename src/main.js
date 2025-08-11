@@ -1,4 +1,10 @@
-// [BATTLESHIP_AR:STEP 12] Rejoin & Resync (Snapshot-Handshake) + Commit/Reveal + MP/SP
+// [BATTLESHIP_AR:STEP 12 + XR UI PATCH]
+// - XR-Toasts für Anweisungen (Platzierung / Angriff / Warte…)
+// - XR-GameOver-Panel direkt im AR (statt DOM-Overlay)
+// - Right-Hand Controller bevorzugt (Left-Hand fallback)
+// - Rejoin/Resync + Commit/Reveal (aus Schritt 12)
+// - Singleplayer + KI-Gegenschuss
+
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
@@ -25,13 +31,9 @@ let lastHoverTarget = null; // 'player' | 'ai' | null
 
 // Debug (aus)
 let debugRay = null;
-let debugDot = null;
 
-// UI
-const overlay = document.getElementById('overlay');
-const overlayTitle = document.getElementById('overlayTitle');
-const overlayMsg = document.getElementById('overlayMsg');
-const btnAgain = document.getElementById('btnAgain');
+// UI (DOM – nur Buttons, kein Overlay für GameOver mehr)
+const btnAgain = document.getElementById('btnAgain');   // bleibt funktionsfähig, aber nicht zwingend nötig
 const btnReset = document.getElementById('btnReset');
 const btnAudio = document.getElementById('btnAudio');
 
@@ -83,6 +85,107 @@ function hapticPulse(intensity=0.5, duration=60) {
       try { gp.vibrationActuator.playEffect('dual-rumble',{ startDelay:0,duration,weakMagnitude:intensity,strongMagnitude:intensity }); } catch {}
     }
   }
+}
+
+// ==== XR UI (Toast & Modal) ====
+let xrToast = null;
+let xrModal = null;
+
+function makeXRPanel(text, w=0.72, h=0.22, bg='#0b132b', fg='#ffffff') {
+  const pxW = 1024, pxH = Math.round(pxW * (h / w));
+  const canvas = document.createElement('canvas');
+  canvas.width = pxW; canvas.height = pxH;
+  const ctx = canvas.getContext('2d');
+
+  // Background (rounded)
+  const r = Math.round(32 * (pxW / 1024));
+  (function roundRect(ctx, x, y, w, h, r) {
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y,   x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x,   y+h, rr);
+    ctx.arcTo(x,   y+h, x,   y,   rr);
+    ctx.arcTo(x,   y,   x+w, y,   rr);
+    ctx.closePath();
+  })(ctx, 0, 0, pxW, pxH, r);
+  ctx.fillStyle = bg; ctx.fill();
+
+  // Text
+  ctx.fillStyle = fg;
+  ctx.font = `bold ${Math.floor(pxH*0.32)}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  wrapText(ctx, text, pxW/2, pxH/2, pxW*0.86, pxH*0.38);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.anisotropy = 8; tex.needsUpdate = true;
+
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+  const geo = new THREE.PlaneGeometry(w, h);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 999; // vor Grid/Board
+  return mesh;
+
+  function wrapText(ctx, text, cx, cy, maxW, lineH){
+    const words = text.split(' ');
+    const lines = [];
+    let line = '';
+    for (const w of words) {
+      const test = (line ? line+' ' : '') + w;
+      if (ctx.measureText(test).width > maxW) { lines.push(line); line = w; }
+      else line = test;
+    }
+    if (line) lines.push(line);
+    const totalH = lines.length * lineH;
+    let y = cy - totalH/2 + lineH/2;
+    for (const ln of lines) { ctx.fillText(ln, cx, y); y += lineH; }
+  }
+}
+
+// Position Toast zwischen die Bretter oder vor die Kamera
+function showToastXR(text, seconds=3, color='#0b132b') {
+  hideToastXR();
+  xrToast = makeXRPanel(text, 0.8, 0.22, color, '#ffffff');
+  const pos = getMidpointForUI();
+  xrToast.position.copy(pos);
+  faceCamera(xrToast);
+  scene.add(xrToast);
+  setTimeout(() => hideToastXR(), Math.max(500, seconds*1000));
+}
+function hideToastXR(){ if (xrToast){ scene.remove(xrToast); xrToast.geometry.dispose(); xrToast.material.map.dispose(); xrToast.material.dispose(); xrToast = null; } }
+
+function showGameOverXR(playerWon) {
+  hideGameOverXR();
+  xrModal = makeXRPanel(playerWon ? '🎉 Du hast gewonnen!' : '💥 Du hast verloren', 0.9, 0.28, playerWon ? '#064e3b' : '#5b0a0a', '#ffffff');
+  // 1m vor Kamera zentriert
+  const cam = renderer.xr.getCamera(camera);
+  const dir = new THREE.Vector3(0,0,-1).applyMatrix4(new THREE.Matrix4().extractRotation(cam.matrixWorld));
+  const pos = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld).addScaledVector(dir, 1.0);
+  pos.y += 0.05;
+  xrModal.position.copy(pos);
+  faceCamera(xrModal);
+  scene.add(xrModal);
+}
+function hideGameOverXR(){ if (xrModal){ scene.remove(xrModal); xrModal.geometry.dispose(); xrModal.material.map.dispose(); xrModal.material.dispose(); xrModal=null; } }
+
+function faceCamera(obj){
+  const cam = renderer.xr.getCamera(camera);
+  obj.lookAt(cam.position);
+}
+
+// bevorzugter UI-Anker: Mitte zwischen beiden Brettern, leicht erhöht
+function getMidpointForUI() {
+  if (boardPlayer && boardAI) {
+    const mid = new THREE.Vector3().addVectors(boardPlayer.position, boardAI.position).multiplyScalar(0.5);
+    mid.y += 0.12;
+    return mid;
+  }
+  // Fallback: vor Reticle oder Kamera
+  if (reticle?.visible) return reticle.position.clone().add(new THREE.Vector3(0,0.12,0));
+  const cam = renderer.xr.getCamera(camera);
+  const dir = new THREE.Vector3(0,0,-1).applyMatrix4(new THREE.Matrix4().extractRotation(cam.matrixWorld));
+  return new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld).addScaledVector(dir, 0.9);
 }
 
 // ---------- Multiplayer + Commit/Reveal + Resync ----------
@@ -141,13 +244,10 @@ async function init() {
     controllers.push(c);
   }
 
-  // Debug (aus)
+  // Debug (unsichtbar)
   const rayGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0,0,-0.9)]);
   debugRay = new THREE.Line(rayGeom, new THREE.LineBasicMaterial({ transparent:true, opacity:0.25 }));
   debugRay.visible = false; scene.add(debugRay);
-
-  debugDot = new THREE.Mesh(new THREE.SphereGeometry(0.01, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
-  debugDot.visible = false; scene.add(debugDot);
 
   // AR-Button
   const btn = ARButton.createButton(renderer, {
@@ -163,7 +263,7 @@ async function init() {
 
   // UI Events
   btnReset?.addEventListener('click', () => resetGame());
-  btnAgain?.addEventListener('click', () => { hideOverlay(); resetGame(); });
+  btnAgain?.addEventListener('click', () => { hideGameOverXR(); resetGame(); });
   btnAudio?.addEventListener('click', () => {
     const on = btnAudio.textContent.includes('an');
     SFX.toggle(on);
@@ -208,7 +308,7 @@ function animate(){ renderer.setAnimationLoop(render); }
 function render(_, frame) {
   const dt = clock.getDelta();
 
-  // Hit-Test solange keine Boards
+  // Hit-Test solange keine Bretter stehen
   if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
     if (hits?.length) {
@@ -232,14 +332,16 @@ function render(_, frame) {
   }
   updateDebugRay(ray.origin, ray.direction);
 
-  // beide Bretter intersecten
+  // Beide Bretter raycasten
   let hitPlayer = null, hitAI = null;
   if (boardPlayer) { raycaster.set(ray.origin, ray.direction); hitPlayer = raycaster.intersectObject(boardPlayer.pickingPlane, false)[0] || null; }
   if (boardAI)     { raycaster.set(ray.origin, ray.direction); hitAI     = raycaster.intersectObject(boardAI.pickingPlane, false)[0]     || null; }
 
+  // Phase-spezifisches Hover
   if (game.phase === PHASE.PLACE_PLAYER) {
     applyHover('player', hitPlayer);
     pollRotateButtons();
+
     if (lastHoverCell && boardPlayer) {
       const type = game.player.fleet[game.player.nextShipIndex];
       if (type) {
@@ -259,7 +361,7 @@ function render(_, frame) {
     boardPlayer?.clearGhost();
   }
 
-  // Effekte
+  // Effekte (kleine Partikel)
   if (effects.length) {
     effects = effects.filter((fx) => { try { return fx.update(dt) !== false; } catch { return false; } });
   }
@@ -291,21 +393,32 @@ function clearHover() {
   boardAI?.setHoverCell(null);
 }
 
+// RIGHT-hand bevorzugt (Left fallback; ansonsten Kamera)
 function getXRRay(frame){
   const session = renderer.xr.getSession();
   if (!session || !referenceSpace) return null;
+
+  const candidates = [];
   for (const c of controllers) {
     const src = c.userData.inputSource;
     if (!src) continue;
     const pose = frame.getPose(src.targetRaySpace, referenceSpace);
-    if (pose) {
-      const { position, orientation } = pose.transform;
-      const origin = new THREE.Vector3(position.x, position.y, position.z);
-      const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-      const direction = new THREE.Vector3(0,0,-1).applyQuaternion(q).normalize();
-      return { origin, direction, controller:c };
-    }
+    if (pose) candidates.push({ c, src, pose });
   }
+
+  let pick = candidates.find(x => x.src.handedness === 'right')
+          || candidates.find(x => x.src.handedness === 'left')
+          || candidates[0];
+
+  if (pick) {
+    const { position, orientation } = pick.pose.transform;
+    const origin = new THREE.Vector3(position.x, position.y, position.z);
+    const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+    const direction = new THREE.Vector3(0,0,-1).applyQuaternion(q).normalize();
+    return { origin, direction, controller: pick.c };
+  }
+
+  // Fallback: Kamera
   const cam = renderer.xr.getCamera(camera);
   const origin = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
   const direction = new THREE.Vector3(0,0,-1).applyMatrix4(new THREE.Matrix4().extractRotation(cam.matrixWorld)).normalize();
@@ -314,7 +427,7 @@ function getXRRay(frame){
 
 // ---------- Interaktion ----------
 async function onSelect(){
-  // 1) Bretter platzieren
+  // 1) Bretter+Labels platzieren
   if (!boardPlayer && !boardAI && reticle.visible) {
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
@@ -338,11 +451,12 @@ async function onSelect(){
 
     game.beginPlacement();
     setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
+    showToastXR('Platziere deine Schiffe: Y/B drehen, Trigger setzt.', 4);
     SFX.toggle(btnAudio?.textContent.includes('an'));
     return;
   }
 
-  // 2) Spieler-Schiffe setzen (auf Spielerbrett)
+  // 2) Spieler-Schiffe setzen (nur auf Spielerbrett)
   if (boardPlayer && game.phase === PHASE.PLACE_PLAYER && lastHoverCell && lastHoverTarget === 'player') {
     const type = game.player.fleet[game.player.nextShipIndex];
     if (!type) return;
@@ -356,7 +470,6 @@ async function onSelect(){
       boardPlayer.placeShipVisual(cells);
       boardPlayer.clearGhost();
       SFX.place(); hapticPulse(0.35, 60);
-      spawnRipple(boardPlayer, cells[0].i, cells[0].j, 0x22ffaa, 0.9, 0.55);
 
       if (res.placedAll) {
         if (mpActive) {
@@ -370,6 +483,7 @@ async function onSelect(){
           const ar = game.aiPlaceFleetRandom();
           if (!ar.ok) { setHUD(`Fehler bei KI-Platzierung: ${ar.reason}`); return; }
           setHUD(`Phase: ${game.phase} — Deine Runde: Ziele auf das rechte Brett und drücke Trigger.`);
+          showToastXR('Dein Zug: Greife das rechte Brett an!', 3, '#14213d');
         }
       } else {
         const next = game.player.fleet[game.player.nextShipIndex];
@@ -414,9 +528,10 @@ async function onSelect(){
         SFX.sunk(); hapticPulse(0.9, 200);
       } else if (res.result === 'miss') {
         setHUD(`Wasser (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
+        showToastXR('KI schießt…', 2, '#402218');
       }
 
-      if (res.gameOver) { showOverlay(true); SFX.win(); return; }
+      if (res.gameOver) { showGameOverXR(true); SFX.win(); return; }
 
       // KI antwortet
       if (game.phase === PHASE.AI_TURN) {
@@ -429,7 +544,7 @@ async function onSelect(){
           else if (k.result === 'sunk') { setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`); SFX.sunk(); }
           else if (k.result === 'miss') setHUD(`KI: Wasser (${k.cell.i},${k.cell.j}). Dein Zug.`);
 
-          if (k.gameOver) { showOverlay(false); SFX.lose(); }
+          if (k.gameOver) { showGameOverXR(false); SFX.lose(); }
           else { game.phase = PHASE.PLAYER_TURN; }
         }
       }
@@ -451,7 +566,7 @@ async function startMP(asHost) {
   if (!room) { mpStatus.textContent = 'Bitte Raumcode setzen.'; return; }
 
   mp = new MPClient();
-  mpIsFresh = true;            // wir sind der frisch verbundene Client
+  mpIsFresh = true;
 
   mpStatus.textContent = 'Verbinde...';
 
@@ -462,7 +577,6 @@ async function startMP(asHost) {
   mp.addEventListener('dc_open', () => {
     mpActive = true; mpLeaveBtn.disabled = false;
 
-    // Handshake: Frischer Client fragt nach Snapshot, „alter“ Client sendet proaktiv beim Peer-Join
     if (mpIsFresh) {
       mp?.send({ type: 'syncRequest' });
     } else if (mpPeerNewlyJoined) {
@@ -477,7 +591,6 @@ async function startMP(asHost) {
     mpStatus.textContent = 'DataChannel geschlossen.';
   });
   mp.addEventListener('peer_joined', () => {
-    // Peer kam neu rein (WS-Ebene); sobald DC offen ist, Snapshot senden
     mpPeerNewlyJoined = true;
     mpStatus.textContent = 'Peer beigetreten — synchronisiere gleich...';
   });
@@ -517,9 +630,8 @@ async function onMPMessage(msg) {
       break;
     }
 
-    // --- Rejoin/Resync ---
+    // --- Resync ---
     case 'syncRequest': {
-      // Sende Snapshot unseres aktuellen Zustands
       sendSyncState();
       break;
     }
@@ -537,7 +649,6 @@ async function onMPMessage(msg) {
       const isHit = (res.result === 'hit' || res.result === 'sunk');
 
       markPeerShot(i, j, isHit, false);
-      // Ergebnis zurück
       mp?.send({ type: 'shotResult', cell: { i, j }, result: res.result, sunk: !!res.sunk, gameOver: !!res.gameOver });
 
       if (res.result === 'hit') setHUD(`Gegner: Treffer (${i},${j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER (du verlierst)' : ''}`);
@@ -545,7 +656,7 @@ async function onMPMessage(msg) {
       else if (res.result === 'miss') setHUD(`Gegner: Wasser (${i},${j}). Dein Zug.`);
 
       if (res.gameOver) {
-        showOverlay(false); SFX.lose();
+        showGameOverXR(false); SFX.lose();
         if (mpMyCommit) mp?.send({ type: 'reveal', salt: mpMyCommit.salt, layout: mpMyCommit.layout });
       } else {
         game.phase = PHASE.PLAYER_TURN;
@@ -566,7 +677,7 @@ async function onMPMessage(msg) {
       else if (msg.result === 'miss') setHUD(`Wasser (${i},${j}) — Gegner ist dran...`);
 
       if (msg.gameOver) {
-        showOverlay(true); SFX.win();
+        showGameOverXR(true); SFX.win();
         if (mpMyCommit) mp?.send({ type: 'reveal', salt: mpMyCommit.salt, layout: mpMyCommit.layout });
       } else {
         game.phase = PHASE.AI_TURN;
@@ -589,17 +700,18 @@ async function onMPMessage(msg) {
 }
 
 function tryStartMPGame() {
-  // Start erst, wenn BEIDE bereit + BEIDE Commits vorhanden
   if (!mpActive) return;
   if (!mpMyReady || !mpPeerReady) return;
   if (!mpMyCommit || !mpPeerCommitHash) return;
 
   if (mpRole === 'host') {
     game.phase = PHASE.PLAYER_TURN;
-    setHUD('Beide bereit. **Du startest.** Ziele auf das rechte Brett und drücke Trigger.');
+    setHUD('Beide bereit. Du startest.');
+    showToastXR('Du startest: Rechtes Brett anvisieren & Trigger!', 3);
   } else {
     game.phase = PHASE.AI_TURN;
-    setHUD('Beide bereit. **Gegner beginnt.** Bitte warten…');
+    setHUD('Beide bereit. Gegner beginnt.');
+    showToastXR('Gegner beginnt – bitte warten…', 3);
   }
 }
 
@@ -631,26 +743,22 @@ function applySyncState(snap) {
   let mappedPhase = PHASE.PLAYER_TURN;
   if (snap.phase === PHASE.PLAYER_TURN) mappedPhase = PHASE.AI_TURN;
   else if (snap.phase === PHASE.AI_TURN) mappedPhase = PHASE.PLAYER_TURN;
-  else mappedPhase = snap.phase; // PLACE_PLAYER/GAME_OVER theoretisch nicht im MP-Spielbetrieb
+  else mappedPhase = snap.phase;
 
-  // Commit/Ready übernehmen (aus Sicht des Peers)
+  // Commit/Ready übernehmen
   mpPeerReady = !!snap.myReady;
   if (typeof snap.myCommitHash === 'string') mpPeerCommitHash = snap.myCommitHash;
 
   // Historie zeichnen (idempotent, ohne SFX/Haptik)
-  // 1) Shots des Peers (auf UNS) ⇒ Marker auf boardPlayer
   for (const s of (snap.myShots || [])) {
     markPeerShot(s.i, s.j, s.result === 'hit' || s.result === 'sunk', true);
   }
-  // 2) Shots von uns (die der Peer gespeichert hat) ⇒ Marker auf boardAI
   for (const s of (snap.peerShots || [])) {
     markMyShot(s.i, s.j, s.result === 'hit' || s.result === 'sunk', true);
   }
 
-  // Pending-Edgecases ignorieren (vereinfachen): Turn aus Phase
   game.phase = mappedPhase;
 
-  // UI
   const who =
     game.phase === PHASE.PLAYER_TURN ? 'Du bist dran.' :
     game.phase === PHASE.AI_TURN ? 'Gegner ist dran…' : `${game.phase}`;
@@ -702,46 +810,51 @@ function updateDebugRay(origin, direction){
   debugRay.geometry.attributes.position.needsUpdate = true;
 }
 
-// ---------- Labels / Overlay / Reset ----------
+// ---------- Labels / Reset ----------
 function makeTextSprite(text, bg='#00ffc8', fg='#000') {
   const pad = 16;
   const canvas = document.createElement('canvas');
   canvas.width = 512; canvas.height = 256;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height);
+
   const r = 28;
-  roundRect(ctx, pad, pad, canvas.width-2*pad, canvas.height-2*pad, r); ctx.fillStyle = bg; ctx.fill();
-  ctx.fillStyle = fg; ctx.font = 'bold 96px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  (function roundRect(ctx, x, y, w, h, r){
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y,   x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x,   y+h, rr);
+    ctx.arcTo(x,   y+h, x,   y,   rr);
+    ctx.arcTo(x,   y,   x+w, y,   rr);
+    ctx.closePath();
+  })(ctx, pad, pad, canvas.width-2*pad, canvas.height-2*pad, r);
+
+  ctx.fillStyle = bg; ctx.fill();
+  ctx.fillStyle = fg;
+  ctx.font = 'bold 96px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   ctx.fillText(text, canvas.width/2, canvas.height/2);
-  const tex = new THREE.CanvasTexture(canvas); tex.needsUpdate = true;
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
-  const sprite = new THREE.Sprite(mat); sprite.scale.set(0.45, 0.22, 1); return sprite;
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.45, 0.22, 1);
+  return sprite;
 }
-function roundRect(ctx, x, y, w, h, r){
-  const rr = Math.min(r, w/2, h/2);
-  ctx.beginPath(); ctx.moveTo(x+rr, y);
-  ctx.arcTo(x+w, y,   x+w, y+h, rr);
-  ctx.arcTo(x+w, y+h, x,   y+h, rr);
-  ctx.arcTo(x,   y+h, x,   y,   rr);
-  ctx.arcTo(x,   y,   x+w, y,   rr); ctx.closePath();
-}
+
 function placeLabelAboveBoard(sprite, board, boardQuat) {
   const local = new THREE.Vector3(0, 0.08, -0.6);
   const world = local.clone().applyQuaternion(boardQuat).add(board.position);
-  sprite.position.copy(world); scene.add(sprite);
+  sprite.position.copy(world);
+  scene.add(sprite);
 }
-
-function showOverlay(playerWon) {
-  overlayTitle.textContent = playerWon ? '🎉 Du hast gewonnen!' : '💥 Du hast verloren';
-  overlayMsg.textContent = playerWon
-    ? 'Alle gegnerischen Schiffe wurden versenkt.'
-    : 'Deine Flotte wurde versenkt.';
-  overlay.style.display = 'flex';
-}
-function hideOverlay() { overlay.style.display = 'none'; }
 
 function resetGame() {
-  hideOverlay();
+  hideGameOverXR();
+  hideToastXR();
   clearBoardsAndLabels();
   newGame();
   setHUD('Zurückgesetzt. Platziere die Bretter neu (Trigger).');
@@ -767,6 +880,7 @@ function spawnRipple(board, i, j, color=0xffffff, startAlpha=0.9, life=0.6) {
   const maxScale = 3.2; let t = 0;
   effects.push({ mesh: ring, update: (dt) => { t+=dt; const k=t/life; ring.scale.setScalar(1+k*maxScale); ring.material.opacity = startAlpha*(1-k); if(k>=1){ board.remove(ring); return false; } return true; } });
 }
+
 function spawnBurst(board, i, j) {
   const p = board.cellCenterLocal(i, j);
   const group = new THREE.Group(); group.position.set(p.x, 0.008, p.z); board.add(group);
@@ -794,7 +908,6 @@ function markMyShot(i, j, hit, silent=false) {
     boardAI?.addShotMarker(i, j, hit);
     rendered.my.add(key);
   }
-  // Historie (idempotent)
   if (!mpHist.myShots.some(s => s.i===i && s.j===j)) {
     mpHist.myShots.push({ i, j, result: hit ? 'hit' : 'miss', sunk: false });
   }
