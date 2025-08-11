@@ -2,12 +2,12 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <title>AR Battleship – Schritt 9</title>
+  <title>AR Battleship – Schritt 10 (Multiplayer)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body { margin:0; padding:0; height:100%; overflow:hidden; }
     #hud {
-      position: fixed; left: 12px; bottom: 12px; right: 200px;
+      position: fixed; left: 12px; bottom: 12px; right: 260px;
       font: 14px/1.4 system-ui, sans-serif; color: #fff;
       background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 10px;
       pointer-events: none; user-select: none;
@@ -23,27 +23,43 @@
     #btnAudio { right: 152px; background:#ffd54f; }
     #btnReset { right: 12px; }
 
+    /* MP Panel */
+    #mp {
+      position: fixed; top: 12px; right: 12px; width: 300px;
+      background: rgba(0,0,0,0.45); color: #fff; border-radius: 12px; padding: 10px 12px;
+      font: 13px system-ui, sans-serif;
+    }
+    #mp h3 { margin: 0 0 8px 0; font-size: 14px; }
+    #mp .row { display: flex; gap: 6px; margin-bottom: 6px; }
+    #mp input { flex: 1; min-width: 0; border-radius: 8px; border: 0; padding: 8px; font: inherit; }
+    #mp button { border-radius: 8px; border: 0; padding: 8px 10px; font: inherit; cursor: pointer; background: #00ffc8; color: #111; }
+    #mp small { opacity: .85; }
+
     /* Game Over Overlay */
-    #overlay {
-      position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-      background: rgba(0,0,0,0.55);
-    }
-    #overlay .card {
-      background: rgba(20,20,28,0.95); color: #fff; border-radius: 14px; padding: 18px 20px;
-      width: min(420px, 90vw); text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.35);
-    }
+    #overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); }
+    #overlay .card { background: rgba(20,20,28,0.95); color: #fff; border-radius: 14px; padding: 18px 20px; width: min(420px, 90vw); text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
     #overlay h2 { margin: 0 0 8px 0; font: 600 20px/1.2 system-ui, sans-serif; }
     #overlay p { margin: 0 0 14px 0; opacity: .9; }
-    #btnAgain {
-      font: 14px system-ui, sans-serif; color: #111; background: #00ffc8;
-      border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer;
-    }
+    #btnAgain { font: 14px system-ui, sans-serif; color: #111; background: #00ffc8; border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer; }
   </style>
 </head>
 <body>
   <div id="hud">
-    <div><strong>AR Battleship</strong> — Schritt 9</div>
-    <div class="small">Platziere Bretter per Trigger. Flotte setzen (Y/B drehen). Schieße auf das rechte Brett.</div>
+    <div><strong>AR Battleship</strong> — Schritt 10</div>
+    <div class="small">Platziere Bretter per Trigger. Flotte setzen (Y/B drehen). Multiplayer: Host/Join (oben rechts), dann beide „bereit“ (passiert automatisch nach Platzierung).</div>
+  </div>
+
+  <!-- Multiplayer Panel -->
+  <div id="mp">
+    <h3>Multiplayer</h3>
+    <div class="row"><input id="mpUrl" value="ws://localhost:8080" /></div>
+    <div class="row">
+      <input id="mpRoom" placeholder="Raumcode z.B. 1234" />
+      <button id="mpHost">Host</button>
+      <button id="mpJoin">Join</button>
+    </div>
+    <div class="row"><button id="mpLeave" style="flex:1;background:#ffd1d1;">Trennen</button></div>
+    <small id="mpStatus">Offline</small>
   </div>
 
   <button id="btnAudio" class="btn" type="button">🔊 SFX an</button>
@@ -58,9 +74,8 @@
     </div>
   </div>
 
+  <!-- Nur dein Main laden; Three/ARButton importiert es selbst -->
   <script type="module">
-    import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
-    import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
     import './src/main.js';
   </script>
 </body>
