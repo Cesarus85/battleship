@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Schiffe-Versenken</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #ui-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        
+        #start-button {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 40px;
+            font-size: 18px;
+            background: #0066cc;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+        
+        #start-button:hover {
+            background: #0052a3;
+        }
+        
+        #info-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            pointer-events: auto;
+            display: none;
+        }
+        
+        #status {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        #controls {
+            font-size: 14px;
+        }
+        
+        #fallback {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            display: none;
+        }
+        
+        .grid-cell {
+            cursor: pointer;
+        }
+        
+        .hit {
+            background-color: #ff4444 !important;
+        }
+        
+        .miss {
+            background-color: #4444ff !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-overlay">
+        <button id="start-button">AR Spiel starten</button>
+        
+        <div id="info-panel">
+            <div id="status">Bereit zum Spielen</div>
+            <div id="controls">
+                • Tippen Sie auf ein Feld um zu schießen<br>
+                • Bewegen Sie sich um das Spielfeld herum<br>
+                • ESC zum Beenden
+            </div>
+        </div>
+        
+        <div id="fallback">
+            <h2>WebXR nicht unterstützt</h2>
+            <p>Ihr Gerät unterstützt kein WebXR AR.<br>
+            Das Spiel läuft im 3D-Modus.</p>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        class ARBattleshipGame {
+            constructor() {
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.xrSession = null;
+                this.isARSupported = false;
+                this.gameGrid = [];
+                this.gridObjects = [];
+                this.gameState = 'menu'; // menu, playing, gameOver
+                this.playerTurn = true;
+                
+                // Game constants
+                this.GRID_SIZE = 10;
+                this.CELL_SIZE = 0.08;
+                this.GRID_SPACING = 0.01;
+                
+                this.init();
+            }
+            
+            async init() {
+                this.checkARSupport();
+                this.setupScene();
+                this.setupEventListeners();
+            }
+            
+            async checkARSupport() {
+                if ('xr' in navigator) {
+                    try {
+                        this.isARSupported = await navigator.xr.isSessionSupported('immersive-ar');
+                        console.log('AR Support:', this.isARSupported);
+                    } catch (e) {
+                        console.log('AR Check Error:', e);
+                        this.isARSupported = false;
+                    }
+                }
+                
+                if (!this.isARSupported) {
+                    document.getElementById('fallback').style.display = 'block';
+                    setTimeout(() => {
+                        document.getElementById('fallback').style.display = 'none';
+                        this.startGame(false);
+                    }, 3000);
+                }
+            }
+            
+            setupScene() {
+                // Scene setup
+                this.scene = new THREE.Scene();
+                
+                // Camera setup
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(0, 1, 1);
+                this.camera.lookAt(0, 0, 0);
+                
+                // Renderer setup
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.xr.enabled = true;
+                document.body.appendChild(this.renderer.domElement);
+                
+                // Lighting
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(1, 1, 1);
+                this.scene.add(directionalLight);
+                
+                // Initialize game grid data
+                this.initGameGrid();
+            }
+            
+            initGameGrid() {
+                this.gameGrid = [];
+                for (let row = 0; row < this.GRID_SIZE; row++) {
+                    this.gameGrid[row] = [];
+                    for (let col = 0; col < this.GRID_SIZE; col++) {
+                        this.gameGrid[row][col] = {
+                            hit: false,
+                            hasShip: Math.random() < 0.1, // 10% Chance für ein Schiff (temporär)
+                            revealed: false
+                        };
+                    }
+                }
+            }
+            
+            createGameGrid() {
+                // Remove existing grid
+                this.gridObjects.forEach(obj => this.scene.remove(obj));
+                this.gridObjects = [];
+                
+                const gridGroup = new THREE.Group();
+                
+                for (let row = 0; row < this.GRID_SIZE; row++) {
+                    for (let col = 0; col < this.GRID_SIZE; col++) {
+                        // Cell geometry
+                        const cellGeometry = new THREE.BoxGeometry(this.CELL_SIZE, 0.01, this.CELL_SIZE);
+                        const cellMaterial = new THREE.MeshLambertMaterial({ 
+                            color: 0x0066cc,
+                            transparent: true,
+                            opacity: 0.7
+                        });
+                        
+                        const cell = new THREE.Mesh(cellGeometry, cellMaterial);
+                        
+                        // Position cell
+                        const x = (col - this.GRID_SIZE / 2) * (this.CELL_SIZE + this.GRID_SPACING);
+                        const z = (row - this.GRID_SIZE / 2) * (this.CELL_SIZE + this.GRID_SPACING);
+                        cell.position.set(x, 0, z);
+                        
+                        // Add user data for interaction
+                        cell.userData = { row, col, type: 'gridCell' };
+                        
+                        // Add border
+                        const borderGeometry = new THREE.EdgesGeometry(cellGeometry);
+                        const borderMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+                        const border = new THREE.LineSegments(borderGeometry, borderMaterial);
+                        border.position.copy(cell.position);
+                        
+                        gridGroup.add(cell);
+                        gridGroup.add(border);
+                        this.gridObjects.push(cell);
+                        this.gridObjects.push(border);
+                    }
+                }
+                
+                // Position the grid in front of camera in AR, or at origin in fallback
+                if (this.isARSupported && this.xrSession) {
+                    gridGroup.position.set(0, -0.5, -1.5);
+                } else {
+                    gridGroup.position.set(0, 0, -2);
+                    gridGroup.rotation.x = -0.2;
+                }
+                
+                this.scene.add(gridGroup);
+                this.gridGroup = gridGroup;
+            }
+            
+            setupEventListeners() {
+                document.getElementById('start-button').addEventListener('click', () => {
+                    this.startGame(this.isARSupported);
+                });
+                
+                // Touch/click interaction
+                this.renderer.domElement.addEventListener('click', (event) => {
+                    this.handleInteraction(event);
+                });
+                
+                // Resize handler
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+                
+                // Keyboard controls
+                document.addEventListener('keydown', (event) => {
+                    if (event.code === 'Escape' && this.xrSession) {
+                        this.xrSession.end();
+                    }
+                });
+            }
+            
+            async startGame(useAR = false) {
+                document.getElementById('start-button').style.display = 'none';
+                document.getElementById('info-panel').style.display = 'block';
+                
+                if (useAR) {
+                    try {
+                        this.xrSession = await navigator.xr.requestSession('immersive-ar', {
+                            requiredFeatures: ['local', 'hit-test'],
+                            optionalFeatures: ['dom-overlay'],
+                            domOverlay: { root: document.getElementById('ui-overlay') }
+                        });
+                        
+                        await this.renderer.xr.setSession(this.xrSession);
+                        
+                        this.xrSession.addEventListener('end', () => {
+                            this.xrSession = null;
+                            document.getElementById('start-button').style.display = 'block';
+                            document.getElementById('info-panel').style.display = 'none';
+                        });
+                        
+                    } catch (error) {
+                        console.error('AR Session Error:', error);
+                        this.fallbackTo3D();
+                    }
+                } else {
+                    this.fallbackTo3D();
+                }
+                
+                this.createGameGrid();
+                this.gameState = 'playing';
+                this.startRenderLoop();
+                this.updateStatus('Wählen Sie ein Feld zum Schießen');
+            }
+            
+            fallbackTo3D() {
+                // Add orbit controls for 3D mode
+                this.camera.position.set(0, 2, 3);
+                this.camera.lookAt(0, 0, 0);
+                
+                // Simple mouse controls
+                let mouseX = 0, mouseY = 0;
+                let isMouseDown = false;
+                
+                document.addEventListener('mousedown', () => isMouseDown = true);
+                document.addEventListener('mouseup', () => isMouseDown = false);
+                document.addEventListener('mousemove', (event) => {
+                    if (isMouseDown) {
+                        mouseX += event.movementX * 0.01;
+                        mouseY += event.movementY * 0.01;
+                        
+                        this.camera.position.x = Math.sin(mouseX) * 3;
+                        this.camera.position.z = Math.cos(mouseX) * 3;
+                        this.camera.position.y = Math.max(0.5, 2 + mouseY);
+                        this.camera.lookAt(0, 0, 0);
+                    }
+                });
+            }
+            
+            handleInteraction(event) {
+                if (this.gameState !== 'playing' || !this.playerTurn) return;
+                
+                const rect = this.renderer.domElement.getBoundingClientRect();
+                const mouse = new THREE.Vector2();
+                mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+                mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+                
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(mouse, this.camera);
+                
+                const intersects = raycaster.intersectObjects(this.gridObjects);
+                
+                if (intersects.length > 0) {
+                    const cell = intersects[0].object;
+                    if (cell.userData.type === 'gridCell') {
+                        this.makeMove(cell.userData.row, cell.userData.col, cell);
+                    }
+                }
+            }
+            
+            makeMove(row, col, cellObject) {
+                const cell = this.gameGrid[row][col];
+                
+                if (cell.revealed) return; // Already shot at
+                
+                cell.revealed = true;
+                
+                if (cell.hasShip) {
+                    // Hit!
+                    cell.hit = true;
+                    cellObject.material.color.setHex(0xff4444);
+                    cellObject.material.opacity = 1;
+                    this.updateStatus('Treffer!');
+                    
+                    // Create hit effect
+                    this.createHitEffect(cellObject.position);
+                } else {
+                    // Miss
+                    cellObject.material.color.setHex(0x444444);
+                    cellObject.material.opacity = 0.8;
+                    this.updateStatus('Verfehlt!');
+                    
+                    // Create miss effect
+                    this.createMissEffect(cellObject.position);
+                }
+                
+                // Simple AI move after delay
+                setTimeout(() => {
+                    this.makeAIMove();
+                }, 1000);
+            }
+            
+            makeAIMove() {
+                // Simple random AI
+                let attempts = 0;
+                let row, col;
+                
+                do {
+                    row = Math.floor(Math.random() * this.GRID_SIZE);
+                    col = Math.floor(Math.random() * this.GRID_SIZE);
+                    attempts++;
+                } while (this.gameGrid[row][col].revealed && attempts < 100);
+                
+                if (attempts < 100) {
+                    // Find the corresponding visual cell
+                    const cellIndex = row * this.GRID_SIZE + col;
+                    if (this.gridObjects[cellIndex * 2]) { // *2 because we have borders too
+                        setTimeout(() => {
+                            this.makeMove(row, col, this.gridObjects[cellIndex * 2]);
+                        }, 500);
+                    }
+                }
+            }
+            
+            createHitEffect(position) {
+                const particles = new THREE.Group();
+                
+                for (let i = 0; i < 10; i++) {
+                    const particleGeometry = new THREE.SphereGeometry(0.005);
+                    const particleMaterial = new THREE.MeshBasicMaterial({ 
+                        color: 0xff4444 + Math.random() * 0x444444 
+                    });
+                    const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+                    
+                    particle.position.copy(position);
+                    particle.position.y += 0.02;
+                    
+                    particle.velocity = new THREE.Vector3(
+                        (Math.random() - 0.5) * 0.1,
+                        Math.random() * 0.1,
+                        (Math.random() - 0.5) * 0.1
+                    );
+                    
+                    particles.add(particle);
+                }
+                
+                this.scene.add(particles);
+                
+                // Animate particles
+                let time = 0;
+                const animate = () => {
+                    time += 0.016;
+                    particles.children.forEach(particle => {
+                        particle.position.add(particle.velocity);
+                        particle.velocity.y -= 0.005; // gravity
+                        particle.material.opacity = Math.max(0, 1 - time * 2);
+                    });
+                    
+                    if (time < 1) {
+                        requestAnimationFrame(animate);
+                    } else {
+                        this.scene.remove(particles);
+                    }
+                };
+                animate();
+            }
+            
+            createMissEffect(position) {
+                const splash = new THREE.Group();
+                
+                for (let i = 0; i < 6; i++) {
+                    const dropGeometry = new THREE.SphereGeometry(0.003);
+                    const dropMaterial = new THREE.MeshBasicMaterial({ color: 0x4444ff });
+                    const drop = new THREE.Mesh(dropGeometry, dropMaterial);
+                    
+                    drop.position.copy(position);
+                    drop.position.y += 0.01;
+                    
+                    const angle = (i / 6) * Math.PI * 2;
+                    drop.velocity = new THREE.Vector3(
+                        Math.cos(angle) * 0.05,
+                        0.03,
+                        Math.sin(angle) * 0.05
+                    );
+                    
+                    splash.add(drop);
+                }
+                
+                this.scene.add(splash);
+                
+                // Animate splash
+                let time = 0;
+                const animate = () => {
+                    time += 0.016;
+                    splash.children.forEach(drop => {
+                        drop.position.add(drop.velocity);
+                        drop.velocity.y -= 0.003;
+                        drop.material.opacity = Math.max(0, 1 - time * 3);
+                    });
+                    
+                    if (time < 0.8) {
+                        requestAnimationFrame(animate);
+                    } else {
+                        this.scene.remove(splash);
+                    }
+                };
+                animate();
+            }
+            
+            updateStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+            
+            startRenderLoop() {
+                this.renderer.setAnimationLoop(() => {
+                    this.renderer.render(this.scene, this.camera);
+                });
+            }
+        }
+        
+        // Initialize the game when page loads
+        window.addEventListener('load', () => {
+            new ARBattleshipGame();
+        });
+    </script>
+</body>
+</html>
