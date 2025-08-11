@@ -37,6 +37,7 @@
             border-radius: 10px;
             cursor: pointer;
             pointer-events: auto;
+            z-index: 1001;
         }
         
         #start-button:hover {
@@ -138,10 +139,18 @@
                     try {
                         this.isARSupported = await navigator.xr.isSessionSupported('immersive-ar');
                         console.log('AR Support:', this.isARSupported);
+                        
+                        // Zusätzliche Checks für verschiedene AR-Modi
+                        if (!this.isARSupported) {
+                            this.isARSupported = await navigator.xr.isSessionSupported('immersive-vr');
+                            console.log('VR Support (fallback):', this.isARSupported);
+                        }
                     } catch (e) {
-                        console.log('AR Check Error:', e);
+                        console.log('XR Check Error:', e);
                         this.isARSupported = false;
                     }
+                } else {
+                    console.log('WebXR not available');
                 }
                 
                 if (!this.isARSupported) {
@@ -234,16 +243,21 @@
                     }
                 }
                 
-                // Position the grid in front of camera in AR, or at origin in fallback
-                if (this.isARSupported && this.xrSession) {
+                // Position the grid based on AR or 3D mode
+                if (this.xrSession) {
+                    // AR Mode: Grid 1.5m in front and 0.5m below starting position
                     gridGroup.position.set(0, -0.5, -1.5);
+                    gridGroup.rotation.x = -Math.PI / 6; // Slight tilt for better viewing
                 } else {
+                    // 3D Mode: Grid at origin with slight rotation
                     gridGroup.position.set(0, 0, -2);
                     gridGroup.rotation.x = -0.2;
                 }
                 
                 this.scene.add(gridGroup);
                 this.gridGroup = gridGroup;
+                
+                console.log('Game grid created, mode:', this.xrSession ? 'AR' : '3D');
             }
             
             setupEventListeners() {
@@ -277,32 +291,73 @@
                 
                 if (useAR) {
                     try {
-                        this.xrSession = await navigator.xr.requestSession('immersive-ar', {
-                            requiredFeatures: ['local', 'hit-test'],
-                            optionalFeatures: ['dom-overlay'],
-                            domOverlay: { root: document.getElementById('ui-overlay') }
-                        });
+                        console.log('Requesting AR session...');
+                        
+                        // Vereinfachte Session-Anfrage
+                        const sessionInit = {
+                            optionalFeatures: ['local', 'local-floor', 'bounded-floor'],
+                        };
+                        
+                        // Versuche DOM-Overlay nur wenn unterstützt
+                        try {
+                            if (await navigator.xr.isSessionSupported('immersive-ar', {
+                                optionalFeatures: ['dom-overlay']
+                            })) {
+                                sessionInit.optionalFeatures.push('dom-overlay');
+                                sessionInit.domOverlay = { root: document.getElementById('ui-overlay') };
+                            }
+                        } catch (e) {
+                            console.log('DOM overlay not supported, continuing without it');
+                        }
+                        
+                        this.xrSession = await navigator.xr.requestSession('immersive-ar', sessionInit);
+                        console.log('AR session created successfully');
+                        
+                        // Referenz-Raum einrichten
+                        const referenceSpace = await this.xrSession.requestReferenceSpace('local');
+                        this.referenceSpace = referenceSpace;
                         
                         await this.renderer.xr.setSession(this.xrSession);
+                        console.log('Renderer XR session set');
                         
                         this.xrSession.addEventListener('end', () => {
+                            console.log('AR session ended');
                             this.xrSession = null;
+                            this.referenceSpace = null;
                             document.getElementById('start-button').style.display = 'block';
                             document.getElementById('info-panel').style.display = 'none';
+                            this.gameState = 'menu';
                         });
+                        
+                        // Kurze Verzögerung vor Grid-Erstellung
+                        setTimeout(() => {
+                            this.createGameGrid();
+                            this.gameState = 'playing';
+                            this.updateStatus('AR bereit - Wählen Sie ein Feld zum Schießen');
+                        }, 500);
                         
                     } catch (error) {
                         console.error('AR Session Error:', error);
-                        this.fallbackTo3D();
+                        console.log('Fallback to 3D mode');
+                        this.updateStatus('AR fehlgeschlagen - 3D Modus wird geladen...');
+                        setTimeout(() => {
+                            this.fallbackTo3D();
+                        }, 1000);
                     }
                 } else {
                     this.fallbackTo3D();
                 }
                 
-                this.createGameGrid();
-                this.gameState = 'playing';
+                if (!useAR) {
+                    this.createGameGrid();
+                    this.gameState = 'playing';
+                }
+                
                 this.startRenderLoop();
-                this.updateStatus('Wählen Sie ein Feld zum Schießen');
+                
+                if (!useAR) {
+                    this.updateStatus('3D Modus - Wählen Sie ein Feld zum Schießen');
+                }
             }
             
             fallbackTo3D() {
