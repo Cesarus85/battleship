@@ -1,6 +1,6 @@
 // [BATTLESHIP_AR:STEP 10] Multiplayer-Integration (WebRTC DataChannel) + SFX/Haptik/Effekte aus Step 9
 import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
-import { ARButton } from 'https://unpkg.com/three@three@0.166.1/examples/jsm/webxr/ARButton.js'; // keep same import as vorher, falls nötig korrigieren
+import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js'; // keep same import as vorher, falls nötig korrigieren
 import { Board } from './board.js';
 import { GameState, PHASE } from './state.js';
 import { MPClient } from './net.js';
