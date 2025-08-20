@@ -43,8 +43,16 @@ export class BoardModel {
       const ii = i + (dir === 'h' ? k : 0);
       const jj = j + (dir === 'v' ? k : 0);
       if (!this.inBounds(ii, jj)) return false;
-      if (this.grid[jj][ii] !== CELL.Empty) return false;
-      // Optional: Randregel (keine Berührung) – später einbauen
+
+      // Prüfe Zelle sowie alle Nachbarn (inkl. Diagonalen) auf Leerheit
+      for (let di = -1; di <= 1; di++) {
+        for (let dj = -1; dj <= 1; dj++) {
+          const ni = ii + di;
+          const nj = jj + dj;
+          if (!this.inBounds(ni, nj)) continue;
+          if (this.grid[nj][ni] !== CELL.Empty) return false;
+        }
+      }
     }
     return true;
   }
