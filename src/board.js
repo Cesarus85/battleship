@@ -162,7 +162,16 @@ export class Board extends THREE.Group {
     }
   }
 
-  clearGhost() { this.ghostGroup.clear(); }
+  clearGhost() {
+    for (const child of this.ghostGroup.children) {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+        else child.material.dispose();
+      }
+    }
+    this.ghostGroup.clear();
+  }
 
   placeShipVisual(cells) {
     const mat = new THREE.MeshBasicMaterial({ color: 0x3399ff, transparent: true, opacity: 0.65, side: THREE.DoubleSide });
