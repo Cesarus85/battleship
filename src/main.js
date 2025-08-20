@@ -487,6 +487,7 @@ async function startMP(asHost) {
   });
   mp.addEventListener('message', (e) => onMPMessage(e.detail));
   mp.addEventListener('error', (e) => { mpStatus.textContent = `Fehler: ${e.detail?.reason || 'unbekannt'}`; });
+  mp.addEventListener('ws_close', () => { stopMP(); mpStatus.textContent = 'WebSocket geschlossen.'; });
 
   try {
     await mp.connect(url, room);

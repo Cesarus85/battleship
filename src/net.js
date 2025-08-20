@@ -17,6 +17,7 @@ export class MPClient extends EventTarget {
         this.wsSend({ type: 'join', room: roomId });
       };
       this.ws.onerror = (e) => this.dispatch('error', { reason: 'ws_error', e });
+      this.ws.onclose = () => { this.dispatch('ws_close', {}); this.closePeer(); };
 
       this.ws.onmessage = async (ev) => {
         let msg; try { msg = JSON.parse(ev.data); } catch { return; }
