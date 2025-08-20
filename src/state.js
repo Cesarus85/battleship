@@ -61,18 +61,31 @@ export class GameState {
   // KI platziert ihre Flotte zufällig (regelkonform)
   aiPlaceFleetRandom() {
     if (this.phase !== PHASE.PLACE_AI) return { ok: false, reason: 'wrong_phase' };
+
+    // alle möglichen Startpositionen (i,j,dir) erzeugen und zufällig mischen
+    const candidates = [];
+    const size = this.ai.board.size;
+    for (let i = 0; i < size; i++) {
+      for (let j = 0; j < size; j++) {
+        candidates.push({ i, j, dir: 'h' });
+        candidates.push({ i, j, dir: 'v' });
+      }
+    }
+    for (let k = candidates.length - 1; k > 0; k--) {
+      const r = Math.floor(Math.random() * (k + 1));
+      [candidates[k], candidates[r]] = [candidates[r], candidates[k]];
+    }
+
+    let idx = 0;
     for (const type of this.ai.fleet) {
-      let placed = false, safety = 0;
-      while (!placed && safety++ < 500) {
-        const dir = Math.random() < 0.5 ? 'h' : 'v';
-        const maxI = dir === 'h' ? this.ai.board.size - type.length : this.ai.board.size - 1;
-        const maxJ = dir === 'v' ? this.ai.board.size - type.length : this.ai.board.size - 1;
-        const i = Math.floor(Math.random() * (maxI + 1));
-        const j = Math.floor(Math.random() * (maxJ + 1));
+      let placed = false;
+      while (!placed && idx < candidates.length) {
+        const { i, j, dir } = candidates[idx++];
         placed = this.ai.board.placeShip(type, i, j, dir);
       }
       if (!placed) return { ok: false, reason: 'placement_failed' };
     }
+
     this.phase = PHASE.PLAYER_TURN;
     return { ok: true };
   }
