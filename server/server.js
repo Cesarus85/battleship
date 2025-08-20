@@ -102,6 +102,16 @@ wss.on('connection', (ws) => {
       ws.roomId = null;
     }
   });
+
+  ws.on('error', (err) => {
+    if (ws.roomId) {
+      const set = rooms.get(ws.roomId);
+      if (set) { set.delete(ws); if (set.size === 0) rooms.delete(ws.roomId); }
+      peerSend(ws.roomId, ws, { type: 'peer_left' });
+      console.log(`[SIGNAL] error room=${ws.roomId}:`, err);
+      ws.roomId = null;
+    }
+  });
 });
 
 // Ping alle 30s
