@@ -97,7 +97,7 @@ export class GameState {
     if (this.phase !== PHASE.AI_TURN) return { ok: false, reason: 'wrong_phase' };
 
     // 1) Zielzelle wählen
-    const target = this.chooseAiTargetCell();
+    let target = this.chooseAiTargetCell();
     if (!target) {
       // Fallback: irgendeine unbeschossene Zelle (sollte selten vorkommen)
       const any = pickAnyUnshot(this.player.board);
