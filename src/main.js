@@ -498,6 +498,7 @@ async function onSelect(){
         setHUD(`Treffer (${lastHoverCell.i},${lastHoverCell.j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER' : ''}`);
       } else if (res.result === 'sunk') {
         setHUD(`Schiff versenkt (${lastHoverCell.i},${lastHoverCell.j})${res.gameOver ? ' — GAME OVER' : ''}`);
+        boardAI?.animateSunkShip(res.ship.cells);
         SFX.sunk(); hapticPulse(0.9, 200);
       } else if (res.result === 'miss') {
         setHUD(`Wasser (${lastHoverCell.i},${lastHoverCell.j}) — KI ist dran...`);
@@ -513,7 +514,7 @@ async function onSelect(){
           markPeerShot(k.cell.i, k.cell.j, aiHit, false);
 
           if (k.result === 'hit') setHUD(`KI: Treffer (${k.cell.i},${k.cell.j})${k.sunk ? ' — versenkt!' : ''}${k.gameOver ? ' — GAME OVER (KI)' : ''}`);
-          else if (k.result === 'sunk') { setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`); SFX.sunk(); }
+          else if (k.result === 'sunk') { setHUD(`KI: versenkt (${k.cell.i},${k.cell.j})${k.gameOver ? ' — GAME OVER (KI)' : ''}`); boardPlayer?.animateSunkShip(k.ship.cells); SFX.sunk(); hapticPulse(0.9, 200); }
           else if (k.result === 'miss') setHUD(`KI: Wasser (${k.cell.i},${k.cell.j}). Dein Zug.`);
 
           if (k.gameOver) { showOverlay(false); SFX.lose(); }
@@ -626,10 +627,12 @@ async function onMPMessage(msg) {
 
       markPeerShot(i, j, isHit, false);
       // Ergebnis zurück
-      mp?.send({ type: 'shotResult', cell: { i, j }, result: res.result, sunk: !!res.sunk, gameOver: !!res.gameOver });
+      const payload = { type: 'shotResult', cell: { i, j }, result: res.result, sunk: !!res.sunk, gameOver: !!res.gameOver };
+      if (res.sunk) payload.shipCells = res.ship.cells;
+      mp?.send(payload);
 
       if (res.result === 'hit') setHUD(`Gegner: Treffer (${i},${j})${res.sunk ? ' — versenkt!' : ''}${res.gameOver ? ' — GAME OVER (du verlierst)' : ''}`);
-      else if (res.result === 'sunk') { setHUD(`Gegner: versenkt (${i},${j})${res.gameOver ? ' — GAME OVER (du verlierst)' : ''}`); SFX.sunk(); }
+      else if (res.result === 'sunk') { setHUD(`Gegner: versenkt (${i},${j})${res.gameOver ? ' — GAME OVER (du verlierst)' : ''}`); boardPlayer?.animateSunkShip(res.ship.cells); SFX.sunk(); hapticPulse(0.9, 200); }
       else if (res.result === 'miss') setHUD(`Gegner: Wasser (${i},${j}). Dein Zug.`);
 
       if (res.gameOver) {
@@ -650,7 +653,7 @@ async function onMPMessage(msg) {
       mpPendingShot = null;
 
       if (msg.result === 'hit') setHUD(`Treffer (${i},${j})${msg.sunk ? ' — versenkt!' : ''}${msg.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`);
-      else if (msg.result === 'sunk') { setHUD(`Schiff versenkt (${i},${j})${msg.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`); SFX.sunk(); hapticPulse(0.9, 200); }
+      else if (msg.result === 'sunk') { setHUD(`Schiff versenkt (${i},${j})${msg.gameOver ? ' — GAME OVER (Du gewinnst)' : ''}`); if (msg.shipCells) boardAI?.animateSunkShip(msg.shipCells); SFX.sunk(); hapticPulse(0.9, 200); }
       else if (msg.result === 'miss') setHUD(`Wasser (${i},${j}) — Gegner ist dran...`);
 
       if (msg.gameOver) {
