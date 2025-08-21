@@ -39,6 +39,12 @@ export class GameState {
     this.aiMemory.parity = computeParity(this.aiMemory.remainingLengths);
 
     this.winner = null;
+
+    // Statistiken
+    this.stats = {
+      player: { shots: 0, hits: 0, sunk: 0 },
+      ai: { shots: 0, hits: 0, sunk: 0 },
+    };
   }
 
   beginPlacement() { this.phase = PHASE.PLACE_PLAYER; }
@@ -115,6 +121,8 @@ export class GameState {
     const res = this.ai.board.shoot(i, j);
     if (!res.ok) return res;
 
+    this.recordShot('player', res);
+
     if (res.gameOver) { this.phase = PHASE.GAME_OVER; this.winner = 'player'; }
     else { this.phase = PHASE.AI_TURN; }
 
@@ -137,6 +145,7 @@ export class GameState {
       return { ok: false, reason: 'no_targets' };
     }
     const res = this.player.board.shoot(target.i, target.j);
+    this.recordShot('ai', res);
     if (res.gameOver) { this.phase = PHASE.GAME_OVER; this.winner = 'ai'; }
     else { this.phase = PHASE.PLAYER_TURN; }
     return { ok: true, cell: target, ...res };
@@ -150,6 +159,7 @@ export class GameState {
       return { ok: false, reason: 'no_targets' };
     }
     const res = this.player.board.shoot(target.i, target.j);
+    this.recordShot('ai', res);
     if (res.sunk && res.ship && res.ship.type && res.ship.type.length) {
       removeOneLength(this.aiMemory.remainingLengths, res.ship.type.length);
       this.aiMemory.parity = computeParity(this.aiMemory.remainingLengths);
@@ -176,6 +186,7 @@ export class GameState {
 
     // 3) Ergebnis verarbeiten
     this.updateAiMemoryAfterShot(target, res);
+    this.recordShot('ai', res);
 
     // 4) Phase/Winner
     if (res.gameOver) { this.phase = PHASE.GAME_OVER; this.winner = 'ai'; }
@@ -237,6 +248,14 @@ export class GameState {
 
     // Wasser: im Target-Modus einfach weitermachen – die Miss-Zelle wird durch grid=MISs ohnehin ausgeschlossen.
     // Wenn Target-Modus aber „festgefahren“ ist (keine gültigen Kandidaten mehr), entscheidet chooseAiTargetCell das beim nächsten Zug.
+  }
+
+  recordShot(side, res) {
+    const s = this.stats?.[side];
+    if (!s) return;
+    s.shots++;
+    if (res.result === 'hit' || res.result === 'sunk') s.hits++;
+    if (res.result === 'sunk') s.sunk++;
   }
 }
 

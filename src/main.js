@@ -35,6 +35,18 @@ const btnAgain = document.getElementById('btnAgain');
 const btnReset = document.getElementById('btnReset');
 const btnAudio = document.getElementById('btnAudio');
 
+// HUD-Statistiken
+const hudStats = (() => {
+  const hud = document.getElementById('hud');
+  if (!hud) return null;
+  const div = document.createElement('div');
+  div.className = 'small';
+  div.id = 'hudStats';
+  div.style.marginTop = '4px';
+  hud.appendChild(div);
+  return div;
+})();
+
 // MP UI
 const mpUrl = document.getElementById('mpUrl');
 const mpRoom = document.getElementById('mpRoom');
@@ -278,6 +290,7 @@ function newGame() {
   mpIsFresh = false; mpPeerNewlyJoined = false;
   mpHist.myShots = []; mpHist.peerShots = [];
   rendered.my.clear(); rendered.peer.clear();
+  updateStatsHUD();
 }
 
 function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
@@ -847,13 +860,34 @@ function placeLabelAboveBoard(sprite, board, boardQuat) {
 }
 
 function showOverlay(playerWon) {
+  const summary = storeStats();
   overlayTitle.textContent = playerWon ? '🎉 Du hast gewonnen!' : '💥 Du hast verloren';
-  overlayMsg.textContent = playerWon
+  let msg = playerWon
     ? 'Alle gegnerischen Schiffe wurden versenkt.'
     : 'Deine Flotte wurde versenkt.';
+  if (summary) {
+    msg += `<br>Schüsse: ${summary.shots}, Treffer: ${summary.hits}, Versenkt: ${summary.sunk}, Quote: ${summary.acc}%`;
+    msg += `<br>Ø-Quote (${summary.games} Spiele): ${summary.avgAcc}%`;
+  }
+  overlayMsg.innerHTML = msg;
   overlay.style.display = 'flex';
 }
 function hideOverlay() { overlay.style.display = 'none'; }
+
+function storeStats() {
+  if (!game) return null;
+  const s = game.stats.player;
+  const key = 'battleshipStats';
+  const data = JSON.parse(localStorage.getItem(key) || '{"games":0,"shots":0,"hits":0,"sunk":0}');
+  data.games += 1;
+  data.shots += s.shots;
+  data.hits += s.hits;
+  data.sunk += s.sunk;
+  localStorage.setItem(key, JSON.stringify(data));
+  const acc = s.shots ? Math.round(100 * s.hits / s.shots) : 0;
+  const avgAcc = data.shots ? Math.round(100 * data.hits / data.shots) : 0;
+  return { shots: s.shots, hits: s.hits, sunk: s.sunk, acc, avgAcc, games: data.games };
+}
 
 function resetGame() {
   hideOverlay();
@@ -932,6 +966,7 @@ function markMyShot(i, j, hit, silent=false) {
   if (!silent) {
     if (hit) { SFX.hit(); hapticPulse(0.7, 120); spawnBurst(boardAI, i, j); }
     else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardAI, i, j); }
+    updateStatsHUD();
   }
 }
 
@@ -947,8 +982,10 @@ function markPeerShot(i, j, hit, silent=false) {
   if (!silent) {
     if (hit) { SFX.hit(); hapticPulse(0.6, 120); spawnBurst(boardPlayer, i, j); }
     else { SFX.miss(); hapticPulse(0.2, 60); spawnRipple(boardPlayer, i, j); }
+    updateStatsHUD();
   }
 }
 
 // ---------- HUD ----------
 function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
+function updateStatsHUD(){ if(!hudStats||!game) return; const ps=game.stats.player; const as=game.stats.ai; hudStats.textContent=`Du: ${ps.shots} Schüsse, ${ps.hits} Treffer, ${ps.sunk} versenkt | KI: ${as.shots} Schüsse, ${as.hits} Treffer, ${as.sunk} versenkt`; }
