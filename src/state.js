@@ -11,8 +11,9 @@ export const PHASE = {
 };
 
 export class GameState {
-  constructor() {
+  constructor(difficulty = 'smart') {
     this.phase = PHASE.INIT;
+    this.difficulty = difficulty;
 
     this.player = {
       board: new BoardModel(10),
@@ -122,7 +123,41 @@ export class GameState {
 
   // --- NEU: Smarte KI ---
   // Behalte Signatur von aiShootRandom() für Abwärtskompatibilität (Step 6/7 rufen das auf)
-  aiShootRandom() { return this.aiShootSmart(); }
+  aiShootRandom() {
+    if (this.difficulty === 'easy') return this.aiShootEasy();
+    if (this.difficulty === 'medium') return this.aiShootMedium();
+    return this.aiShootSmart();
+  }
+
+  aiShootEasy() {
+    if (this.phase !== PHASE.AI_TURN) return { ok: false, reason: 'wrong_phase' };
+    const target = pickAnyUnshot(this.player.board);
+    if (!target) {
+      this.phase = PHASE.GAME_OVER; this.winner = 'ai';
+      return { ok: false, reason: 'no_targets' };
+    }
+    const res = this.player.board.shoot(target.i, target.j);
+    if (res.gameOver) { this.phase = PHASE.GAME_OVER; this.winner = 'ai'; }
+    else { this.phase = PHASE.PLAYER_TURN; }
+    return { ok: true, cell: target, ...res };
+  }
+
+  aiShootMedium() {
+    if (this.phase !== PHASE.AI_TURN) return { ok: false, reason: 'wrong_phase' };
+    const target = chooseHuntCell(this.player.board, this.aiMemory.parity);
+    if (!target) {
+      this.phase = PHASE.GAME_OVER; this.winner = 'ai';
+      return { ok: false, reason: 'no_targets' };
+    }
+    const res = this.player.board.shoot(target.i, target.j);
+    if (res.sunk && res.ship && res.ship.type && res.ship.type.length) {
+      removeOneLength(this.aiMemory.remainingLengths, res.ship.type.length);
+      this.aiMemory.parity = computeParity(this.aiMemory.remainingLengths);
+    }
+    if (res.gameOver) { this.phase = PHASE.GAME_OVER; this.winner = 'ai'; }
+    else { this.phase = PHASE.PLAYER_TURN; }
+    return { ok: true, cell: target, ...res };
+  }
 
   aiShootSmart() {
     if (this.phase !== PHASE.AI_TURN) return { ok: false, reason: 'wrong_phase' };
