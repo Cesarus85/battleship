@@ -43,6 +43,34 @@ const mpJoinBtn = document.getElementById('mpJoin');
 const mpLeaveBtn = document.getElementById('mpLeave');
 const mpStatus = document.getElementById('mpStatus');
 
+// Schwierigkeitsauswahl
+const difficultySelect = (() => {
+  const box = document.createElement('div');
+  box.style.position = 'fixed';
+  box.style.top = '12px';
+  box.style.left = '12px';
+  box.style.background = 'rgba(0,0,0,0.45)';
+  box.style.color = '#fff';
+  box.style.borderRadius = '12px';
+  box.style.padding = '10px 12px';
+  box.style.font = '13px system-ui, sans-serif';
+  const label = document.createElement('label');
+  label.textContent = 'KI:';
+  label.setAttribute('for', 'difficulty');
+  label.style.marginRight = '6px';
+  const sel = document.createElement('select');
+  sel.id = 'difficulty';
+  sel.innerHTML = `
+    <option value="easy">Leicht</option>
+    <option value="medium">Mittel</option>
+    <option value="smart" selected>Schwer</option>
+  `;
+  box.appendChild(label);
+  box.appendChild(sel);
+  document.body.appendChild(box);
+  return sel;
+})();
+
 // Labels
 let labelPlayer = null;
 let labelAI = null;
@@ -180,7 +208,7 @@ async function init() {
 }
 
 function newGame() {
-  game = new GameState();
+  game = new GameState(difficultySelect?.value);
   clearBoardsAndLabels();
   effects = [];
   clock.start();
