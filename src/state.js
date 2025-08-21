@@ -48,6 +48,8 @@ export class GameState {
 
   tryPlaceNextPlayerShip(i, j) {
     if (this.phase !== PHASE.PLACE_PLAYER) return { ok: false, reason: 'wrong_phase' };
+    // Sicherstellen, dass Index nach einem Undo stimmt
+    this.player.nextShipIndex = Math.min(this.player.nextShipIndex, this.player.board.ships.length);
     const shipType = this.player.fleet[this.player.nextShipIndex];
     if (!shipType) return { ok: false, reason: 'no_more_ships' };
     const ok = this.player.board.placeShip(shipType, i, j, this.player.orientation);
@@ -56,6 +58,22 @@ export class GameState {
     this.player.nextShipIndex++;
     if (this.player.nextShipIndex >= this.player.fleet.length) this.phase = PHASE.PLACE_AI;
     return { ok: true, shipType, placedAll: this.phase === PHASE.PLACE_AI };
+  }
+
+  removePlayerShip(i, j) {
+    if (this.phase !== PHASE.PLACE_PLAYER) return { ok: false, reason: 'wrong_phase' };
+    const ships = this.player.board.ships;
+    if (!ships.length) return { ok: false, reason: 'no_ship' };
+    const ship = ships[ships.length - 1];
+    const contains = ship.cells.some(c => c.i === i && c.j === j);
+    if (!contains) return { ok: false, reason: 'not_last_ship' };
+    let dir = 'h';
+    if (ship.cells.length >= 2) {
+      dir = (ship.cells[0].j === ship.cells[1].j) ? 'h' : 'v';
+    }
+    this.player.board.removeShip(ship.type, ship.cells[0].i, ship.cells[0].j, dir);
+    this.player.nextShipIndex--;
+    return { ok: true, shipType: ship.type };
   }
 
   // KI platziert ihre Flotte zufällig (regelkonform)
