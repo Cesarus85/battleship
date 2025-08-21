@@ -49,7 +49,7 @@ let labelAI = null;
 
 // Buttons / Timing
 const prevButtons = new Map();
-const IDX = { BY: 4 };
+const IDX = { BY: 4, TRIGGER: 0 };
 const BOARD_GAP = 1.2;
 let clock = new THREE.Clock();
 let effects = [];
@@ -683,14 +683,38 @@ function layoutString(boardModel) {
 // ---------- Buttons / Rotation ----------
 function pollRotateButtons(){
   if (game.phase !== PHASE.PLACE_PLAYER) return;
+  const now = performance.now();
   for (const c of controllers) {
     const gp = c.userData.inputSource?.gamepad;
     if (!gp) continue;
     let mask = 0; gp.buttons.forEach((b,i)=>{ if(b?.pressed) mask|=(1<<i); });
-    const prev = prevButtons.get(c) ?? 0;
-    const justBY = ((mask & (1<<IDX.BY)) && !(prev & (1<<IDX.BY)));
+    const state = prevButtons.get(c) ?? { mask:0, t0:0, handled:false };
+
+    const justBY = ((mask & (1<<IDX.BY)) && !(state.mask & (1<<IDX.BY)));
     if (justBY) { setHUD(`Phase: ${game.phase} — Ausrichtung: ${game.toggleOrientation()}`); SFX.rotate(); hapticPulse(0.25, 40); }
-    prevButtons.set(c, mask);
+
+    // Langer Triggerdruck zum Entfernen des letzten Schiffs
+    if (mask & (1<<IDX.TRIGGER)) {
+      if (!(state.mask & (1<<IDX.TRIGGER))) {
+        state.t0 = now; state.handled = false;
+      } else if (!state.handled && (now - state.t0) > 600) {
+        state.handled = true;
+        if (lastHoverCell && lastHoverTarget === 'player') {
+          const res = game.removePlayerShip(lastHoverCell.i, lastHoverCell.j);
+          if (res.ok) {
+            refreshPlayerShips();
+            const next = game.player.fleet[game.player.nextShipIndex];
+            if (next) setHUD(`Phase: ${game.phase} — Schiff ${game.player.nextShipIndex + 1}/${game.player.fleet.length}: ${next.name} (${next.length}) | Ausrichtung: ${game.player.orientation}`);
+            SFX.miss(); hapticPulse(0.25, 40);
+          }
+        }
+      }
+    } else {
+      state.t0 = 0; state.handled = false;
+    }
+
+    state.mask = mask;
+    prevButtons.set(c, state);
   }
 }
 
@@ -758,6 +782,22 @@ function clearBoardsAndLabels() {
 }
 
 // ---------- Effekte ----------
+function refreshPlayerShips(){
+  if (!boardPlayer) return;
+  const group = boardPlayer.shipsGroup;
+  for (const child of [...group.children]) {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (Array.isArray(child.material)) child.material.forEach(m=>m.dispose());
+      else child.material.dispose();
+    }
+  }
+  group.clear();
+  for (const s of game.player.board.ships) {
+    boardPlayer.placeShipVisual(s.cells);
+  }
+}
+
 function spawnRipple(board, i, j, color=0xffffff, startAlpha=0.9, life=0.6) {
   const p = board.cellCenterLocal(i, j);
   const ring = new THREE.Mesh(

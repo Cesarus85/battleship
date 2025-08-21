@@ -72,6 +72,32 @@ export class BoardModel {
     return true;
   }
 
+  // Schiff wieder entfernen (z.B. bei Undo)
+  removeShip(type, i, j, dir = 'h') {
+    const cells = [];
+    for (let k = 0; k < type.length; k++) {
+      const ii = i + (dir === 'h' ? k : 0);
+      const jj = j + (dir === 'v' ? k : 0);
+      if (!this.inBounds(ii, jj)) return false;
+      this.grid[jj][ii] = CELL.Empty;
+      cells.push({ i: ii, j: jj });
+    }
+    const idx = this.ships.findIndex(s =>
+      s.type === type &&
+      s.cells.length === cells.length &&
+      s.cells.every((c, n) => c.i === cells[n].i && c.j === cells[n].j)
+    );
+    if (idx >= 0) {
+      const ship = this.ships[idx];
+      this.totalShipCells -= ship.type.length;
+      this.totalHits -= ship.hits.size;
+      this.ships.splice(idx, 1);
+    } else {
+      this.totalShipCells -= type.length;
+    }
+    return true;
+  }
+
   // Schuss abgeben – gibt Ergebnis zurück
   shoot(i, j) {
     if (!this.inBounds(i, j)) return { ok: false, repeat: false, result: 'out' };
