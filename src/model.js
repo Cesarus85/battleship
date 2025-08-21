@@ -24,8 +24,9 @@ export const DEFAULT_FLEET = [
 ];
 
 export class BoardModel {
-  constructor(size = 10) {
+  constructor(size = 10, fleet = DEFAULT_FLEET) {
     this.size = size;
+    this.fleet = fleet;
     this.grid = Array.from({ length: size }, () => new Array(size).fill(CELL.Empty));
     // Liste der platzierten Schiffe: {type, cells:[{i,j}], hits:Set('i,j')}
     this.ships = [];
