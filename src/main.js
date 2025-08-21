@@ -3,7 +3,7 @@ import * as THREE from 'https://unpkg.com/three@0.166.1/build/three.module.js';
 import { ARButton } from 'https://unpkg.com/three@0.166.1/examples/jsm/webxr/ARButton.js';
 import { Board } from './board.js';
 import { GameState, PHASE } from './state.js';
-import { CELL } from './model.js';
+import { CELL, ShipType, DEFAULT_FLEET } from './model.js';
 import { MPClient } from './net.js';
 import { sha256Hex, randomSalt } from './crypto.js';
 
@@ -69,6 +69,50 @@ const difficultySelect = (() => {
   box.appendChild(sel);
   document.body.appendChild(box);
   return sel;
+})();
+
+// Brettgröße & Flottenkonfiguration
+const setupConfig = (() => {
+  const box = document.createElement('div');
+  box.style.position = 'fixed';
+  box.style.top = '60px';
+  box.style.left = '12px';
+  box.style.background = 'rgba(0,0,0,0.45)';
+  box.style.color = '#fff';
+  box.style.borderRadius = '12px';
+  box.style.padding = '10px 12px';
+  box.style.font = '13px system-ui, sans-serif';
+
+  const sizeLabel = document.createElement('label');
+  sizeLabel.textContent = 'Größe:';
+  sizeLabel.setAttribute('for', 'boardSize');
+  sizeLabel.style.marginRight = '6px';
+  const sizeSel = document.createElement('select');
+  sizeSel.id = 'boardSize';
+  for (let s = 8; s <= 12; s++) {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = `${s}×${s}`;
+    if (s === 10) opt.selected = true;
+    sizeSel.appendChild(opt);
+  }
+
+  const fleetLabel = document.createElement('label');
+  fleetLabel.textContent = 'Flotte (Name,Länge,Anzahl pro Zeile):';
+  fleetLabel.style.display = 'block';
+  fleetLabel.style.marginTop = '6px';
+  const fleetInput = document.createElement('textarea');
+  fleetInput.id = 'fleetDef';
+  fleetInput.rows = 4;
+  fleetInput.style.width = '180px';
+  fleetInput.value = DEFAULT_FLEET.map(t => `${t.name},${t.length},${t.count}`).join('\n');
+
+  box.appendChild(sizeLabel);
+  box.appendChild(sizeSel);
+  box.appendChild(fleetLabel);
+  box.appendChild(fleetInput);
+  document.body.appendChild(box);
+  return { sizeSel, fleetInput };
 })();
 
 // Labels
@@ -207,8 +251,23 @@ async function init() {
   setHUD(`Phase: ${game.phase} — Platziere die Bretter mit Trigger.`);
 }
 
+function parseFleetInput(str = '') {
+  const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
+  const fleet = [];
+  for (const line of lines) {
+    const [name, lenStr, countStr] = line.split(',').map(s => s.trim());
+    const length = parseInt(lenStr, 10);
+    const count = parseInt(countStr, 10);
+    if (!name || isNaN(length) || isNaN(count)) continue;
+    fleet.push(new ShipType(name, length, count));
+  }
+  return fleet.length ? fleet : DEFAULT_FLEET;
+}
+
 function newGame() {
-  game = new GameState(difficultySelect?.value);
+  const size = parseInt(setupConfig?.sizeSel?.value, 10) || 10;
+  const fleet = parseFleetInput(setupConfig?.fleetInput?.value);
+  game = new GameState(difficultySelect?.value, size, fleet);
   clearBoardsAndLabels();
   effects = [];
   clock.start();
@@ -347,12 +406,12 @@ async function onSelect(){
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
 
-    boardPlayer = new Board({ size: 1.0, divisions: 10 });
+    boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
     boardPlayer.position.copy(basePos);
     boardPlayer.quaternion.copy(baseQuat);
     scene.add(boardPlayer);
 
-    boardAI = new Board({ size: 1.0, divisions: 10 });
+    boardAI = new Board({ size: 1.0, divisions: game.ai.board.size });
     const offsetLocal = new THREE.Vector3(BOARD_GAP, 0, 0);
     const offsetWorld = offsetLocal.clone().applyQuaternion(baseQuat);
     boardAI.position.copy(basePos).add(offsetWorld);

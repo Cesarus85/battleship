@@ -11,20 +11,20 @@ export const PHASE = {
 };
 
 export class GameState {
-  constructor(difficulty = 'smart') {
+  constructor(difficulty = 'smart', size = 10, fleet = DEFAULT_FLEET) {
     this.phase = PHASE.INIT;
     this.difficulty = difficulty;
 
     this.player = {
-      board: new BoardModel(10),
-      fleet: expandFleet(DEFAULT_FLEET),
+      board: new BoardModel(size, fleet),
+      fleet: expandFleet(fleet),
       nextShipIndex: 0,
       orientation: 'h',
     };
 
     this.ai = {
-      board: new BoardModel(10),
-      fleet: expandFleet(DEFAULT_FLEET),
+      board: new BoardModel(size, fleet),
+      fleet: expandFleet(fleet),
     };
 
     // KI-Gedächtnis für gegnerische (Spieler-)Flotte
@@ -33,7 +33,7 @@ export class GameState {
       hits: [],                            // laufender Treffer-Cluster [{i,j}]
       orientation: null,                   // null | 'h' | 'v'
       frontier: new Set(),                 // Kandidaten im Target-Modus (Keys "i,j")
-      remainingLengths: flattenFleetLengths(DEFAULT_FLEET), // z.B. [4,3,3,2,2,2,1,1,1,1]
+      remainingLengths: flattenFleetLengths(fleet), // z.B. [4,3,3,2,2,2,1,1,1,1]
       parity: 2,                           // 2 solange minLength>=2, sonst 1
     };
     this.aiMemory.parity = computeParity(this.aiMemory.remainingLengths);
