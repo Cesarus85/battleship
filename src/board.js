@@ -202,4 +202,35 @@ export class Board extends THREE.Group {
       this.shotsGroup.add(m);
     }
   }
+
+  // Kurze Versenk-Animation pro Zellposition
+  animateSunkShip(cells) {
+    for (const c of cells) {
+      const p = this.cellCenterLocal(c.i, c.j);
+      const quad = new THREE.Mesh(
+        new THREE.PlaneGeometry(this.cellSize, this.cellSize),
+        new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.8, side: THREE.DoubleSide })
+      );
+      quad.rotateX(-Math.PI / 2);
+      quad.position.set(p.x, 0.001, p.z);
+      this.add(quad);
+
+      const start = performance.now();
+      const duration = 300;
+      const animate = (now) => {
+        const k = (now - start) / duration;
+        if (k < 1) {
+          const s = 1 + k * 0.5;
+          quad.scale.set(s, s, s);
+          quad.material.opacity = 0.8 * (1 - k);
+          requestAnimationFrame(animate);
+        } else {
+          this.remove(quad);
+          quad.geometry.dispose();
+          quad.material.dispose();
+        }
+      };
+      requestAnimationFrame(animate);
+    }
+  }
 }
