@@ -11,9 +11,11 @@ import { sha256Hex, randomSalt } from './crypto.js';
 let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
+let lastHit = null;
 
 let boardPlayer = null;
 let boardAI = null;
+let boardAnchor = null;
 let game = null;
 
 const controllers = [];
@@ -151,6 +153,7 @@ let labelAI = null;
 const prevButtons = new Map();
 const IDX = { BY: 4, TRIGGER: 0 };
 const BOARD_GAP = 1.2;
+const boardAIOffset = new THREE.Vector3(BOARD_GAP, 0, 0);
 let clock = new THREE.Clock();
 let effects = [];
 
@@ -252,7 +255,7 @@ async function init() {
   // AR-Button
   const btn = ARButton.createButton(renderer, {
     requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay'],
+    optionalFeatures: ['dom-overlay', 'anchors'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
@@ -317,7 +320,7 @@ async function onSessionStart(){
   viewerSpace = await session.requestReferenceSpace('viewer');
   hitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
 }
-function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; }
+function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; boardAnchor=null; }
 
 function animate(){ renderer.setAnimationLoop(render); }
 
@@ -348,15 +351,30 @@ function render(_, frame) {
           );
           // Use the original rotation logic but ensure proper surface alignment
           reticle.quaternion.setFromRotationMatrix(m);
+          lastHit = hit;
           found = true;
           break;
         }
       }
     }
-    if (!found) reticle.visible = false;
+    if (!found) { reticle.visible = false; lastHit = null; }
   }
 
   if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
+
+  if (boardAnchor && boardPlayer && boardAI) {
+    const anchorPose = frame.getPose(boardAnchor.anchorSpace, referenceSpace);
+    if (anchorPose) {
+      const { position, orientation } = anchorPose.transform;
+      const anchorPos = new THREE.Vector3(position.x, position.y, position.z);
+      const anchorQuat = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+      boardPlayer.position.copy(anchorPos);
+      boardPlayer.quaternion.copy(anchorQuat);
+      const offsetWorld = boardAIOffset.clone().applyQuaternion(anchorQuat);
+      boardAI.position.copy(anchorPos).add(offsetWorld);
+      boardAI.quaternion.copy(anchorQuat);
+    }
+  }
 
   const ray = getXRRay(frame);
   if (!ray) {
@@ -453,17 +471,22 @@ async function onSelect(){
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
 
+    if (lastHit?.createAnchor) {
+      try { boardAnchor = await lastHit.createAnchor(); } catch (e) { console.warn('Anchor creation failed', e); }
+    }
+
     boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
     boardPlayer.position.copy(basePos);
     boardPlayer.quaternion.copy(baseQuat);
     scene.add(boardPlayer);
 
     boardAI = new Board({ size: 1.0, divisions: game.ai.board.size });
-    const offsetLocal = new THREE.Vector3(BOARD_GAP, 0, 0);
-    const offsetWorld = offsetLocal.clone().applyQuaternion(baseQuat);
+    const offsetWorld = boardAIOffset.clone().applyQuaternion(baseQuat);
     boardAI.position.copy(basePos).add(offsetWorld);
     boardAI.quaternion.copy(baseQuat);
     scene.add(boardAI);
+
+    lastHit = null;
 
     labelPlayer = makeTextSprite('DU', '#2ad3ff', '#001018');
     labelAI = makeTextSprite('GEGNER', '#ff5a5a', '#220000');
@@ -944,6 +967,7 @@ function clearBoardsAndLabels() {
   if (statsTex) statsTex.dispose();
   statsSprite = null; statsCanvas = null; statsCtx = null; statsTex = null;
   boardPlayer = null; boardAI = null; labelPlayer = null; labelAI = null;
+  boardAnchor = null;
   lastHoverCell = null; lastHoverTarget = null;
 }
 
