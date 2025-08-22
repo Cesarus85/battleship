@@ -12,6 +12,10 @@ let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
 
+const RETICLE_OFFSET = 0.01;
+const DOWN = new THREE.Vector3(0, -1, 0);
+const lastHitPos = new THREE.Vector3();
+
 let boardPlayer = null;
 let boardAI = null;
 let game = null;
@@ -332,7 +336,12 @@ function render(_, frame) {
       const pose = hits[0].getPose(referenceSpace);
       if (pose) {
         reticle.visible = true;
-        reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
+        lastHitPos.set(
+          pose.transform.position.x,
+          pose.transform.position.y,
+          pose.transform.position.z
+        );
+        reticle.position.copy(lastHitPos).addScaledVector(DOWN, RETICLE_OFFSET);
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
         reticle.quaternion.setFromRotationMatrix(m);
       }
@@ -433,7 +442,7 @@ function getXRRay(frame){
 async function onSelect(){
   // 1) Bretter platzieren
   if (!boardPlayer && !boardAI && reticle.visible) {
-    const basePos = reticle.position.clone();
+    const basePos = lastHitPos.clone().addScaledVector(DOWN, RETICLE_OFFSET);
     const baseQuat = reticle.quaternion.clone();
 
     boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
