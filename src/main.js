@@ -12,6 +12,8 @@ let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
 let lastHit = null;
+let lastHitPlane = null;
+let lastPlaneMatrix = null;
 let lowNormalWarned = false;
 
 let repositioning = false;
@@ -384,6 +386,13 @@ function render(_, frame) {
           // Use the original rotation logic but ensure proper surface alignment
           reticle.quaternion.setFromRotationMatrix(m);
           lastHit = hit;
+          lastHitPlane = hit?.plane || null;
+          if (lastHitPlane) {
+            const planePose = frame.getPose(lastHitPlane.planeSpace, refSpace);
+            lastPlaneMatrix = planePose ? new THREE.Matrix4().fromArray(planePose.transform.matrix) : null;
+          } else {
+            lastPlaneMatrix = null;
+          }
           found = true;
           break;
         } else {
@@ -401,6 +410,13 @@ function render(_, frame) {
             lowNormalWarned = true;
           }
           lastHit = hit;
+          lastHitPlane = hit?.plane || null;
+          if (lastHitPlane) {
+            const planePose = frame.getPose(lastHitPlane.planeSpace, refSpace);
+            lastPlaneMatrix = planePose ? new THREE.Matrix4().fromArray(planePose.transform.matrix) : null;
+          } else {
+            lastPlaneMatrix = null;
+          }
           found = true;
           break;
         }
@@ -525,6 +541,56 @@ function getXRRay(frame){
   return { origin, direction, controller:null };
 }
 
+function pointInPolygon(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, zi = poly[i].y;
+    const xj = poly[j].x, zj = poly[j].y;
+    const intersect = ((zi > pt.y) !== (zj > pt.y)) &&
+      (pt.x < (xj - xi) * (pt.y - zi) / (zj - zi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function boardOverhang(pos, quat, plane, planeMatrix, size) {
+  if (!plane || !plane.polygon || !planeMatrix) return false;
+  const inv = new THREE.Matrix4().copy(planeMatrix).invert();
+  const half = size / 2;
+  const corners = [
+    new THREE.Vector3(-half, 0, -half),
+    new THREE.Vector3(-half, 0, half),
+    new THREE.Vector3(half, 0, half),
+    new THREE.Vector3(half, 0, -half)
+  ];
+  const polygon = [];
+  if (Array.isArray(plane.polygon)) {
+    for (const p of plane.polygon) {
+      polygon.push(new THREE.Vector2(p.x, p.z));
+    }
+  } else {
+    for (let i = 0; i < plane.polygon.length; i += 3) {
+      polygon.push(new THREE.Vector2(plane.polygon[i], plane.polygon[i + 2]));
+    }
+  }
+  for (const c of corners) {
+    const world = c.clone().applyQuaternion(quat).add(pos);
+    const local = world.clone().applyMatrix4(inv);
+    const pt = new THREE.Vector2(local.x, local.z);
+    if (!pointInPolygon(pt, polygon)) return true;
+  }
+  return false;
+}
+
+function addOverhangVisual(board) {
+  const geom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(board.size + 0.04, board.size + 0.04));
+  const mat = new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 });
+  const line = new THREE.LineSegments(geom, mat);
+  line.rotateX(-Math.PI / 2);
+  line.position.y = 0.015;
+  board.add(line);
+}
+
 // ---------- Interaktion ----------
 async function onSelect(){
   if (repositioning) return;
@@ -532,6 +598,18 @@ async function onSelect(){
   if (!boardPlayer && !boardAI && reticle.visible) {
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
+    const offsetWorld = boardAIOffset.clone().applyQuaternion(baseQuat);
+    const aiPos = basePos.clone().add(offsetWorld);
+
+    let overPlayer = false, overAI = false;
+    if (lastHitPlane && lastPlaneMatrix) {
+      overPlayer = boardOverhang(basePos, baseQuat, lastHitPlane, lastPlaneMatrix, 1.0);
+      overAI = boardOverhang(aiPos, baseQuat, lastHitPlane, lastPlaneMatrix, 1.0);
+      if (overPlayer || overAI) {
+        const ok = confirm('Brett ragt über Tisch hinaus – trotzdem platzieren?');
+        if (!ok) return;
+      }
+    }
 
     if (lastHit?.createAnchor) {
       try { boardAnchor = await lastHit.createAnchor(); } catch (e) { console.warn('Anchor creation failed', e); }
@@ -543,10 +621,12 @@ async function onSelect(){
     scene.add(boardPlayer);
 
     boardAI = new Board({ size: 1.0, divisions: game.ai.board.size });
-    const offsetWorld = boardAIOffset.clone().applyQuaternion(baseQuat);
-    boardAI.position.copy(basePos).add(offsetWorld);
+    boardAI.position.copy(aiPos);
     boardAI.quaternion.copy(baseQuat);
     scene.add(boardAI);
+
+    if (overPlayer) addOverhangVisual(boardPlayer);
+    if (overAI) addOverhangVisual(boardAI);
 
     lastHit = null;
 
