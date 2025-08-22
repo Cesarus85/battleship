@@ -153,6 +153,7 @@ const IDX = { BY: 4, TRIGGER: 0 };
 const BOARD_GAP = 1.2;
 let clock = new THREE.Clock();
 let effects = [];
+const RETICLE_SMOOTH = 8; // höher => schnellere Annäherung
 
 // ---------- SFX & Haptik ----------
 const SFX = (() => {
@@ -330,18 +331,29 @@ function render(_, frame) {
     if (hits?.length) {
       const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
       if (pose) {
-        reticle.visible = true;
-        // Set position from hit test result, with small offset to place on surface
-        reticle.position.set(
-          pose.transform.position.x, 
+        const targetPos = new THREE.Vector3(
+          pose.transform.position.x,
           pose.transform.position.y + 0.001, // Minimal offset to avoid z-fighting
           pose.transform.position.z
         );
-        // Use the original rotation logic but ensure proper surface alignment
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-        reticle.quaternion.setFromRotationMatrix(m);
+        const targetQuat = new THREE.Quaternion().setFromRotationMatrix(m);
+
+        const wasVisible = reticle.visible;
+        reticle.visible = true;
+
+        if (!wasVisible) {
+          reticle.position.copy(targetPos);
+          reticle.quaternion.copy(targetQuat);
+        } else {
+          const alpha = 1 - Math.exp(-RETICLE_SMOOTH * dt);
+          reticle.position.lerp(targetPos, alpha);
+          reticle.quaternion.slerp(targetQuat, alpha);
+        }
       }
-    } else reticle.visible = false;
+    } else {
+      reticle.visible = false;
+    }
   }
 
   if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
