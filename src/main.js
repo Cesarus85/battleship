@@ -61,6 +61,13 @@ const mpJoinBtn = document.getElementById('mpJoin');
 const mpLeaveBtn = document.getElementById('mpLeave');
 const mpStatus = document.getElementById('mpStatus');
 
+function preventXRSelect(el) {
+  const stop = e => { e.preventDefault(); e.stopPropagation(); };
+  el.addEventListener('beforexrselect', stop, { passive: false, capture: true });
+  el.addEventListener('pointerdown', e => e.stopPropagation(), { capture: true });
+  el.addEventListener('touchstart', e => e.stopPropagation(), { capture: true });
+}
+
 // Schwierigkeitsauswahl
 const difficultySelect = (() => {
   const box = document.createElement('div');
@@ -83,7 +90,7 @@ const difficultySelect = (() => {
     <option value="medium">Mittel</option>
     <option value="smart" selected>Schwer</option>
   `;
-  sel.addEventListener('beforexrselect', e => e.preventDefault());
+  preventXRSelect(sel);
   box.appendChild(label);
   box.appendChild(sel);
   document.body.appendChild(box);
@@ -115,7 +122,7 @@ const setupConfig = (() => {
     if (s === 10) opt.selected = true;
     sizeSel.appendChild(opt);
   }
-  sizeSel.addEventListener('beforexrselect', e => e.preventDefault());
+  preventXRSelect(sizeSel);
 
   const fleetLabel = document.createElement('label');
   fleetLabel.textContent = 'Flotte (Name,Länge,Anzahl pro Zeile):';
@@ -126,7 +133,7 @@ const setupConfig = (() => {
   fleetInput.rows = 4;
   fleetInput.style.width = '180px';
   fleetInput.value = DEFAULT_FLEET.map(t => `${t.name},${t.length},${t.count}`).join('\n');
-  fleetInput.addEventListener('beforexrselect', e => e.preventDefault());
+  preventXRSelect(fleetInput);
 
   box.appendChild(sizeLabel);
   box.appendChild(sizeSel);
