@@ -83,6 +83,7 @@ const difficultySelect = (() => {
     <option value="medium">Mittel</option>
     <option value="smart" selected>Schwer</option>
   `;
+  sel.addEventListener('beforexrselect', e => e.preventDefault());
   box.appendChild(label);
   box.appendChild(sel);
   document.body.appendChild(box);
@@ -114,6 +115,7 @@ const setupConfig = (() => {
     if (s === 10) opt.selected = true;
     sizeSel.appendChild(opt);
   }
+  sizeSel.addEventListener('beforexrselect', e => e.preventDefault());
 
   const fleetLabel = document.createElement('label');
   fleetLabel.textContent = 'Flotte (Name,Länge,Anzahl pro Zeile):';
@@ -124,6 +126,7 @@ const setupConfig = (() => {
   fleetInput.rows = 4;
   fleetInput.style.width = '180px';
   fleetInput.value = DEFAULT_FLEET.map(t => `${t.name},${t.length},${t.count}`).join('\n');
+  fleetInput.addEventListener('beforexrselect', e => e.preventDefault());
 
   box.appendChild(sizeLabel);
   box.appendChild(sizeSel);
