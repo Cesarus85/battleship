@@ -12,10 +12,6 @@ let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
 
-const RETICLE_OFFSET = 0.01;
-const lastHitPos = new THREE.Vector3();
-const lastHitNormal = new THREE.Vector3();
-
 let boardPlayer = null;
 let boardAI = null;
 let game = null;
@@ -222,7 +218,6 @@ async function init() {
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
-  renderer.xr.setReferenceSpaceType('local-floor');
   document.body.appendChild(renderer.domElement);
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.0));
@@ -318,7 +313,7 @@ function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; c
 
 async function onSessionStart(){
   const session = renderer.xr.getSession();
-  referenceSpace = await session.requestReferenceSpace('local-floor');
+  referenceSpace = await session.requestReferenceSpace('local');
   viewerSpace = await session.requestReferenceSpace('viewer');
   hitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
 }
@@ -333,22 +328,11 @@ function render(_, frame) {
   if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
     if (hits?.length) {
-      const pose = hits[0].getPose(referenceSpace);
+      const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
       if (pose) {
         reticle.visible = true;
-        lastHitPos.set(
-          pose.transform.position.x,
-          pose.transform.position.y,
-          pose.transform.position.z
-        );
+        reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-        const surfaceNormal = new THREE.Vector3(0, 1, 0).applyMatrix4(m).normalize();
-        lastHitNormal.copy(surfaceNormal);
-        reticle.position.set(
-          pose.transform.position.x,
-          pose.transform.position.y,
-          pose.transform.position.z
-        ).addScaledVector(surfaceNormal, -RETICLE_OFFSET);
         reticle.quaternion.setFromRotationMatrix(m);
       }
     } else reticle.visible = false;
@@ -448,7 +432,7 @@ function getXRRay(frame){
 async function onSelect(){
   // 1) Bretter platzieren
   if (!boardPlayer && !boardAI && reticle.visible) {
-    const basePos = lastHitPos.clone().addScaledVector(lastHitNormal, -RETICLE_OFFSET);
+    const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
 
     boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
