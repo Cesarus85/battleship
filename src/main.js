@@ -327,21 +327,33 @@ function render(_, frame) {
   // Hit-Test solange keine Boards
   if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
+    let found = false;
     if (hits?.length) {
-      const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
-      if (pose) {
-        reticle.visible = true;
-        // Set position from hit test result, with small offset to place on surface
-        reticle.position.set(
-          pose.transform.position.x, 
-          pose.transform.position.y + 0.001, // Minimal offset to avoid z-fighting
-          pose.transform.position.z
-        );
-        // Use the original rotation logic but ensure proper surface alignment
+      const refSpace = renderer.xr.getReferenceSpace();
+      for (const hit of hits) {
+        const pose = hit.getPose(refSpace);
+        if (!pose) continue;
+
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-        reticle.quaternion.setFromRotationMatrix(m);
+        const normal = new THREE.Vector3(0, 1, 0)
+          .applyQuaternion(new THREE.Quaternion().setFromRotationMatrix(m));
+
+        if (normal.y >= 0.75) {
+          reticle.visible = true;
+          // Set position from hit test result, with small offset to place on surface
+          reticle.position.set(
+            pose.transform.position.x,
+            pose.transform.position.y + 0.001, // Minimal offset to avoid z-fighting
+            pose.transform.position.z
+          );
+          // Use the original rotation logic but ensure proper surface alignment
+          reticle.quaternion.setFromRotationMatrix(m);
+          found = true;
+          break;
+        }
       }
-    } else reticle.visible = false;
+    }
+    if (!found) reticle.visible = false;
   }
 
   if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
