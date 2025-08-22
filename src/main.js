@@ -331,9 +331,29 @@ function render(_, frame) {
       const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
       if (pose) {
         reticle.visible = true;
-        reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
+        // Extract rotation matrix and apply only XZ rotation, keep Y up
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-        reticle.quaternion.setFromRotationMatrix(m);
+        const position = new THREE.Vector3();
+        const quaternion = new THREE.Quaternion();
+        const scale = new THREE.Vector3();
+        m.decompose(position, quaternion, scale);
+        
+        // Set position directly from hit test result
+        reticle.position.copy(position);
+        
+        // For surface alignment, we want the reticle to lay flat on the detected plane
+        // Extract the Y-axis (normal) from the pose matrix and align the reticle
+        const normal = new THREE.Vector3(0, 1, 0).applyMatrix4(m).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        
+        // Calculate rotation to align reticle with surface normal
+        if (normal.dot(up) < 0.999) {
+          const axis = new THREE.Vector3().crossVectors(up, normal).normalize();
+          const angle = Math.acos(Math.max(-1, Math.min(1, up.dot(normal))));
+          reticle.quaternion.setFromAxisAngle(axis, angle);
+        } else {
+          reticle.quaternion.set(0, 0, 0, 1);
+        }
       }
     } else reticle.visible = false;
   }
