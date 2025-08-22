@@ -13,6 +13,8 @@ let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
 let lastHit = null;
 
+let repositioning = false;
+
 let boardPlayer = null;
 let boardAI = null;
 let boardAnchor = null;
@@ -36,6 +38,7 @@ const overlayMsg = document.getElementById('overlayMsg');
 const btnAgain = document.getElementById('btnAgain');
 const btnReset = document.getElementById('btnReset');
 const btnAudio = document.getElementById('btnAudio');
+const btnReposition = document.getElementById('btnReposition');
 
 // HUD-Statistiken
 const hudStats = (() => {
@@ -273,6 +276,7 @@ async function init() {
     btnAudio.textContent = on ? '🔇 SFX aus' : '🔊 SFX an';
     if (on) { SFX.place(); hapticPulse(0.2, 40); }
   });
+  btnReposition?.addEventListener('click', () => toggleReposition());
 
   mpHostBtn?.addEventListener('click', () => startMP(true));
   mpJoinBtn?.addEventListener('click', () => startMP(false));
@@ -322,13 +326,37 @@ async function onSessionStart(){
 }
 function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; boardAnchor=null; }
 
+async function toggleReposition(){
+  if (!boardPlayer || !boardAI) return;
+  if (!repositioning) {
+    repositioning = true;
+    boardAnchor = null;
+    reticle.visible = true;
+    lastHit = null;
+    btnReposition.textContent = 'Brett fixieren';
+    setHUD('Bretter verschieben: ausrichten und erneut bestätigen.');
+  } else {
+    repositioning = false;
+    reticle.visible = false;
+    btnReposition.textContent = 'Brett verschieben';
+    if (lastHit?.createAnchor) {
+      try { boardAnchor = await lastHit.createAnchor(); } catch (e) { console.warn('Anchor creation failed', e); }
+    }
+    const q = reticle.quaternion;
+    if (labelPlayer) { labelPlayer.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardPlayer.position)); }
+    if (labelAI) { labelAI.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardAI.position)); }
+    if (statsSprite) { statsSprite.position.copy(boardAI.position).add(new THREE.Vector3(0.8,0.25,-0.6).applyQuaternion(q)); }
+    setHUD(`Phase: ${game.phase}`);
+  }
+}
+
 function animate(){ renderer.setAnimationLoop(render); }
 
 function render(_, frame) {
   const dt = clock.getDelta();
 
-  // Hit-Test solange keine Boards
-  if (frame && hitTestSource && !boardPlayer && !boardAI) {
+  // Hit-Test solange keine Boards oder beim Verschieben
+  if (frame && hitTestSource && (!boardPlayer && !boardAI || repositioning)) {
     const hits = frame.getHitTestResults(hitTestSource);
     let found = false;
     if (hits?.length) {
@@ -374,6 +402,18 @@ function render(_, frame) {
       boardAI.position.copy(anchorPos).add(offsetWorld);
       boardAI.quaternion.copy(anchorQuat);
     }
+  }
+
+  if (repositioning && boardPlayer && boardAI && reticle.visible) {
+    boardPlayer.position.copy(reticle.position);
+    boardPlayer.quaternion.copy(reticle.quaternion);
+    const offsetWorld = boardAIOffset.clone().applyQuaternion(reticle.quaternion);
+    boardAI.position.copy(reticle.position).add(offsetWorld);
+    boardAI.quaternion.copy(reticle.quaternion);
+    const q = reticle.quaternion;
+    if (labelPlayer) labelPlayer.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardPlayer.position));
+    if (labelAI) labelAI.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardAI.position));
+    if (statsSprite) statsSprite.position.copy(boardAI.position).add(new THREE.Vector3(0.8,0.25,-0.6).applyQuaternion(q));
   }
 
   const ray = getXRRay(frame);
@@ -466,6 +506,7 @@ function getXRRay(frame){
 
 // ---------- Interaktion ----------
 async function onSelect(){
+  if (repositioning) return;
   // 1) Bretter platzieren
   if (!boardPlayer && !boardAI && reticle.visible) {
     const basePos = reticle.position.clone();
@@ -969,6 +1010,9 @@ function clearBoardsAndLabels() {
   boardPlayer = null; boardAI = null; labelPlayer = null; labelAI = null;
   boardAnchor = null;
   lastHoverCell = null; lastHoverTarget = null;
+  repositioning = false;
+  if (btnReposition) btnReposition.textContent = 'Brett verschieben';
+  reticle.visible = false;
 }
 
 // ---------- Effekte ----------
