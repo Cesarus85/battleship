@@ -322,7 +322,10 @@ async function onSessionStart(){
   const session = renderer.xr.getSession();
   referenceSpace = await session.requestReferenceSpace('local');
   viewerSpace = await session.requestReferenceSpace('viewer');
-  hitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
+  hitTestSource = await session.requestHitTestSource?.({
+    space: viewerSpace,
+    entityTypes: ['plane', 'point']
+  });
 }
 function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; boardAnchor=null; }
 
@@ -362,7 +365,7 @@ function render(_, frame) {
     if (hits?.length) {
       const refSpace = renderer.xr.getReferenceSpace();
       for (const hit of hits) {
-        const pose = hit.getPose(refSpace);
+        const pose = hit.getPose?.(refSpace);
         if (!pose) continue;
 
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
