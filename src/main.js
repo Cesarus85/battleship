@@ -12,6 +12,7 @@ let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
 let lastHit = null;
+let lowNormalWarned = false;
 
 let repositioning = false;
 
@@ -372,7 +373,7 @@ function render(_, frame) {
         const normal = new THREE.Vector3(0, 1, 0)
           .applyQuaternion(new THREE.Quaternion().setFromRotationMatrix(m));
 
-        if (normal.y >= 0.75) {
+        if (normal.y >= 0.6) {
           reticle.visible = true;
           // Set position from hit test result, with small offset to place on surface
           reticle.position.set(
@@ -382,6 +383,23 @@ function render(_, frame) {
           );
           // Use the original rotation logic but ensure proper surface alignment
           reticle.quaternion.setFromRotationMatrix(m);
+          lastHit = hit;
+          found = true;
+          break;
+        } else {
+          reticle.visible = true;
+          // Set position from hit test result, with small offset to place on surface
+          reticle.position.set(
+            pose.transform.position.x,
+            pose.transform.position.y + 0.001, // Minimal offset to avoid z-fighting
+            pose.transform.position.z
+          );
+          // Use the original rotation logic but ensure proper surface alignment
+          reticle.quaternion.setFromRotationMatrix(m);
+          if (!lowNormalWarned) {
+            console.warn('Surface is steep; placement may be unreliable.');
+            lowNormalWarned = true;
+          }
           lastHit = hit;
           found = true;
           break;
