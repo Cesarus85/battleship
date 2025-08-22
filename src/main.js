@@ -1004,14 +1004,20 @@ function markPeerShot(i, j, hit, silent=false) {
 function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
 function createStatsSprite(){
   statsCanvas = document.createElement('canvas');
-  statsCanvas.width = 512; statsCanvas.height = 256;
+  // Increase canvas width so longer text fits without wrapping
+  statsCanvas.width = 1024; statsCanvas.height = 256;
   statsCtx = statsCanvas.getContext('2d');
   statsTex = new THREE.CanvasTexture(statsCanvas);
-  const mat = new THREE.SpriteMaterial({ map: statsTex, transparent: true });
+  // Disable depth testing so the stats panel is always visible above labels
+  const mat = new THREE.SpriteMaterial({ map: statsTex, transparent: true, depthTest: false });
   statsSprite = new THREE.Sprite(mat);
-  statsSprite.scale.set(0.6, 0.3, 1);
+  // Keep panel in front of the enemy label
+  statsSprite.renderOrder = 1;
+  // Adjust scale proportionally to the wider canvas
+  statsSprite.scale.set(1.2, 0.35, 1);
   scene.add(statsSprite);
-  const offset = new THREE.Vector3(0, 0.2, -0.7).applyQuaternion(boardAI.quaternion);
+  // Position the stats sprite slightly offset from the enemy label
+  const offset = new THREE.Vector3(0.8, 0.25, -0.6).applyQuaternion(boardAI.quaternion);
   statsSprite.position.copy(boardAI.position).add(offset);
   updateStatsHUD();
 }
