@@ -16,6 +16,12 @@ let lastHitPlane = null;
 let lastPlaneMatrix = null;
 let lowNormalWarned = false;
 
+const RETICLE_COLOR_FOUND = 0x00ffcc;
+const RETICLE_COLOR_NOHIT = 0xff4444;
+const FALLBACK_DISTANCE = 1.0;
+let noHit = false;
+let hudPrevText = '';
+
 let repositioning = false;
 
 let boardPlayer = null;
@@ -234,7 +240,7 @@ async function init() {
   // Retikel
   reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
+    new THREE.MeshBasicMaterial({ color: RETICLE_COLOR_FOUND, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
   );
   reticle.visible = false;
   scene.add(reticle);
@@ -422,7 +428,25 @@ function render(_, frame) {
         }
       }
     }
-    if (!found) { reticle.visible = false; lastHit = null; }
+    if (!found) {
+      const camPos = new THREE.Vector3();
+      camera.getWorldPosition(camPos);
+      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      reticle.visible = true;
+      reticle.position.copy(camPos.add(dir.multiplyScalar(FALLBACK_DISTANCE)));
+      reticle.quaternion.copy(camera.quaternion);
+      lastHit = null;
+      if (!noHit) {
+        hudPrevText = getHUDText();
+        setHUD('Keine Ebene erkannt – Objekt wird vor dir platziert.');
+        reticle.material.color.setHex(RETICLE_COLOR_NOHIT);
+        noHit = true;
+      }
+    } else if (noHit) {
+      reticle.material.color.setHex(RETICLE_COLOR_FOUND);
+      setHUD(hudPrevText);
+      noHit = false;
+    }
   }
 
   if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
@@ -1199,6 +1223,7 @@ function markPeerShot(i, j, hit, silent=false) {
 
 // ---------- HUD ----------
 function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
+function getHUDText(){ const hud=document.getElementById('hud'); return hud ? hud.querySelector('.small').textContent : ''; }
 function createStatsSprite(){
   statsCanvas = document.createElement('canvas');
   // Increase canvas width so longer text fits without wrapping
