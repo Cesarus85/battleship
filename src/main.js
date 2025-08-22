@@ -28,6 +28,7 @@ let boardPlayer = null;
 let boardAI = null;
 let boardAnchor = null;
 let game = null;
+let boardBaseQuat = new THREE.Quaternion();
 
 const controllers = [];
 const raycaster = new THREE.Raycaster();
@@ -266,8 +267,7 @@ async function init() {
 
   // AR-Button
   const btn = ARButton.createButton(renderer, {
-    requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay', 'anchors'],
+    optionalFeatures: ['dom-overlay', 'anchors', 'hand-tracking', 'hit-test'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
@@ -285,14 +285,14 @@ async function init() {
     btnAudio.textContent = on ? '🔇 SFX aus' : '🔊 SFX an';
     if (on) { SFX.place(); hapticPulse(0.2, 40); }
   });
-  btnReposition?.addEventListener('click', () => toggleReposition());
+  btnReposition?.addEventListener('click', () => startReposition());
 
   mpHostBtn?.addEventListener('click', () => startMP(true));
   mpJoinBtn?.addEventListener('click', () => startMP(false));
   mpLeaveBtn?.addEventListener('click', () => stopMP());
 
   newGame();
-  setHUD(`Phase: ${game.phase} — Platziere die Bretter mit Trigger.`);
+  setHUD('Starte AR-Sitzung...');
 }
 
 function parseFleetInput(str = '') {
@@ -335,30 +335,90 @@ async function onSessionStart(){
     space: viewerSpace,
     entityTypes: ['plane', 'point']
   });
+  spawnBoardInFront();
 }
 function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; boardAnchor=null; }
 
-async function toggleReposition(){
+function startReposition(){
   if (!boardPlayer || !boardAI) return;
-  if (!repositioning) {
-    repositioning = true;
-    boardAnchor = null;
-    reticle.visible = true;
-    lastHit = null;
-    btnReposition.textContent = 'Brett fixieren';
-    setHUD('Bretter verschieben: ausrichten und erneut bestätigen.');
-  } else {
-    repositioning = false;
-    reticle.visible = false;
-    btnReposition.textContent = 'Brett verschieben';
-    if (lastHit?.createAnchor) {
-      try { boardAnchor = await lastHit.createAnchor(); } catch (e) { console.warn('Anchor creation failed', e); }
+  repositioning = true;
+  if (boardAnchor) { try { boardAnchor.delete?.(); } catch{} }
+  boardAnchor = null;
+  btnReposition.textContent = 'Brett fixieren';
+  const baseQuat = camera.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -Math.PI/2));
+  boardBaseQuat.copy(baseQuat);
+  setHUD('Brett verschieben: Hand folgen und mit Pinch fixieren.');
+}
+
+function spawnBoardInFront() {
+  if (boardPlayer || boardAI) return;
+  const camPos = new THREE.Vector3();
+  camera.getWorldPosition(camPos);
+  const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
+  const basePos = camPos.add(dir.multiplyScalar(0.4));
+  const baseQuat = camera.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -Math.PI/2));
+  boardBaseQuat.copy(baseQuat);
+
+  boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
+  boardPlayer.position.copy(basePos);
+  boardPlayer.quaternion.copy(baseQuat);
+  scene.add(boardPlayer);
+
+  boardAI = new Board({ size: 1.0, divisions: game.ai.board.size });
+  const offsetWorld = boardAIOffset.clone().applyQuaternion(baseQuat);
+  boardAI.position.copy(basePos).add(offsetWorld);
+  boardAI.quaternion.copy(baseQuat);
+  scene.add(boardAI);
+
+  labelPlayer = makeTextSprite('DU', '#2ad3ff', '#001018');
+  labelAI = makeTextSprite('GEGNER', '#ff5a5a', '#220000');
+  placeLabelAboveBoard(labelPlayer, boardPlayer, baseQuat);
+  placeLabelAboveBoard(labelAI, boardAI, baseQuat);
+
+  createStatsSprite();
+  btnReposition.textContent = 'Brett verschieben';
+
+  game.beginPlacement();
+  setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
+}
+
+function updateBoardFromHand(frame) {
+  const session = renderer.xr.getSession();
+  const handInput = session?.inputSources?.find(src => src.hand);
+  if (!handInput) return;
+  const indexTip = handInput.hand.get('index-finger-tip');
+  if (!indexTip) return;
+  const tipPose = frame.getJointPose(indexTip, referenceSpace);
+  if (!tipPose) return;
+  const { x, y, z } = tipPose.transform.position;
+
+  boardPlayer.position.set(x, y, z);
+  boardPlayer.quaternion.copy(boardBaseQuat);
+  const offsetWorld = boardAIOffset.clone().applyQuaternion(boardBaseQuat);
+  boardAI.position.set(x + offsetWorld.x, y + offsetWorld.y, z + offsetWorld.z);
+  boardAI.quaternion.copy(boardBaseQuat);
+  const q = boardBaseQuat;
+  if (labelPlayer) labelPlayer.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardPlayer.position));
+  if (labelAI) labelAI.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardAI.position));
+  if (statsSprite) statsSprite.position.copy(boardAI.position).add(new THREE.Vector3(0.8,0.25,-0.6).applyQuaternion(q));
+
+  const thumbTip = handInput.hand.get('thumb-tip');
+  if (thumbTip) {
+    const thumbPose = frame.getJointPose(thumbTip, referenceSpace);
+    if (thumbPose) {
+      const tp = thumbPose.transform.position;
+      const dx = x - tp.x, dy = y - tp.y, dz = z - tp.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist < 0.03) {
+        repositioning = false;
+        btnReposition.textContent = 'Brett verschieben';
+        setHUD(`Phase: ${game.phase}`);
+        if (frame.createAnchor) {
+          const anchorPose = new XRRigidTransform({ x, y, z }, { x: q.x, y: q.y, z: q.z, w: q.w });
+          frame.createAnchor(anchorPose, referenceSpace).then(a => { boardAnchor = a; }).catch(()=>{});
+        }
+      }
     }
-    const q = reticle.quaternion;
-    if (labelPlayer) { labelPlayer.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardPlayer.position)); }
-    if (labelAI) { labelAI.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardAI.position)); }
-    if (statsSprite) { statsSprite.position.copy(boardAI.position).add(new THREE.Vector3(0.8,0.25,-0.6).applyQuaternion(q)); }
-    setHUD(`Phase: ${game.phase}`);
   }
 }
 
@@ -367,8 +427,8 @@ function animate(){ renderer.setAnimationLoop(render); }
 function render(_, frame) {
   const dt = clock.getDelta();
 
-  // Hit-Test solange keine Boards oder beim Verschieben
-  if (frame && hitTestSource && (!boardPlayer && !boardAI || repositioning)) {
+  // Hit-Test solange keine Boards
+  if (frame && hitTestSource && (!boardPlayer && !boardAI)) {
     const hits = frame.getHitTestResults(hitTestSource);
     let found = false;
     if (hits?.length) {
@@ -465,16 +525,8 @@ function render(_, frame) {
     }
   }
 
-  if (repositioning && boardPlayer && boardAI && reticle.visible) {
-    boardPlayer.position.copy(reticle.position);
-    boardPlayer.quaternion.copy(reticle.quaternion);
-    const offsetWorld = boardAIOffset.clone().applyQuaternion(reticle.quaternion);
-    boardAI.position.copy(reticle.position).add(offsetWorld);
-    boardAI.quaternion.copy(reticle.quaternion);
-    const q = reticle.quaternion;
-    if (labelPlayer) labelPlayer.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardPlayer.position));
-    if (labelAI) labelAI.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardAI.position));
-    if (statsSprite) statsSprite.position.copy(boardAI.position).add(new THREE.Vector3(0.8,0.25,-0.6).applyQuaternion(q));
+  if (repositioning && boardPlayer && boardAI) {
+    updateBoardFromHand(frame);
   }
 
   const ray = getXRRay(frame);
@@ -1118,7 +1170,7 @@ function resetGame() {
   hideOverlay();
   clearBoardsAndLabels();
   newGame();
-  setHUD('Zurückgesetzt. Platziere die Bretter neu (Trigger).');
+  spawnBoardInFront();
 }
 
 function clearBoardsAndLabels() {
@@ -1136,6 +1188,7 @@ function clearBoardsAndLabels() {
   boardAnchor = null;
   lastHoverCell = null; lastHoverTarget = null;
   repositioning = false;
+  boardBaseQuat.identity();
   if (btnReposition) btnReposition.textContent = 'Brett verschieben';
   reticle.visible = false;
 }
