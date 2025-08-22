@@ -328,7 +328,7 @@ function render(_, frame) {
   if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
     if (hits?.length) {
-      const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
+      const pose = hits[0].getPose(referenceSpace);
       if (pose) {
         reticle.visible = true;
         reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
