@@ -47,6 +47,12 @@ const hudStats = (() => {
   return div;
 })();
 
+// 3D Statistiktafel
+let statsSprite = null;
+let statsCanvas = null;
+let statsCtx = null;
+let statsTex = null;
+
 // MP UI
 const mpUrl = document.getElementById('mpUrl');
 const mpRoom = document.getElementById('mpRoom');
@@ -435,6 +441,8 @@ async function onSelect(){
     labelAI = makeTextSprite('GEGNER', '#ff5a5a', '#220000');
     placeLabelAboveBoard(labelPlayer, boardPlayer, baseQuat);
     placeLabelAboveBoard(labelAI, boardAI, baseQuat);
+
+    createStatsSprite();
 
     game.beginPlacement();
     setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
@@ -901,6 +909,12 @@ function clearBoardsAndLabels() {
   if (boardAI) scene.remove(boardAI);
   if (labelPlayer) scene.remove(labelPlayer);
   if (labelAI) scene.remove(labelAI);
+  if (statsSprite) {
+    scene.remove(statsSprite);
+    statsSprite.material?.dispose();
+  }
+  if (statsTex) statsTex.dispose();
+  statsSprite = null; statsCanvas = null; statsCtx = null; statsTex = null;
   boardPlayer = null; boardAI = null; labelPlayer = null; labelAI = null;
   lastHoverCell = null; lastHoverTarget = null;
 }
@@ -988,4 +1002,18 @@ function markPeerShot(i, j, hit, silent=false) {
 
 // ---------- HUD ----------
 function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
-function updateStatsHUD(){ if(!hudStats||!game) return; const ps=game.stats.player; const as=game.stats.ai; hudStats.textContent=`Du: ${ps.shots} Schüsse, ${ps.hits} Treffer, ${ps.sunk} versenkt | KI: ${as.shots} Schüsse, ${as.hits} Treffer, ${as.sunk} versenkt`; }
+function createStatsSprite(){
+  statsCanvas = document.createElement('canvas');
+  statsCanvas.width = 512; statsCanvas.height = 256;
+  statsCtx = statsCanvas.getContext('2d');
+  statsTex = new THREE.CanvasTexture(statsCanvas);
+  const mat = new THREE.SpriteMaterial({ map: statsTex, transparent: true });
+  statsSprite = new THREE.Sprite(mat);
+  statsSprite.scale.set(0.6, 0.3, 1);
+  scene.add(statsSprite);
+  const offset = new THREE.Vector3(0, 0.2, -0.7).applyQuaternion(boardAI.quaternion);
+  statsSprite.position.copy(boardAI.position).add(offset);
+  updateStatsHUD();
+}
+
+function updateStatsHUD(){ if(!hudStats||!game) return; const ps=game.stats.player; const as=game.stats.ai; hudStats.textContent=`Du: ${ps.shots} Schüsse, ${ps.hits} Treffer, ${ps.sunk} versenkt | KI: ${as.shots} Schüsse, ${as.hits} Treffer, ${as.sunk} versenkt`; if(statsCtx && statsTex){ statsCtx.clearRect(0,0,statsCanvas.width,statsCanvas.height); statsCtx.fillStyle='rgba(0,0,0,0.55)'; statsCtx.fillRect(0,0,statsCanvas.width,statsCanvas.height); statsCtx.fillStyle='#fff'; statsCtx.font='40px sans-serif'; statsCtx.textBaseline='top'; statsCtx.fillText(`Du: ${ps.shots} Schüsse, ${ps.hits} Treffer, ${ps.sunk} versenkt`,20,40); statsCtx.fillText(`KI: ${as.shots} Schüsse, ${as.hits} Treffer, ${as.sunk} versenkt`,20,140); statsTex.needsUpdate=true; } }
