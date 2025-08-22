@@ -218,6 +218,7 @@ async function init() {
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
+  renderer.xr.setReferenceSpaceType('local-floor');
   document.body.appendChild(renderer.domElement);
 
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.0));
@@ -313,7 +314,7 @@ function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; c
 
 async function onSessionStart(){
   const session = renderer.xr.getSession();
-  referenceSpace = await session.requestReferenceSpace('local');
+  referenceSpace = await session.requestReferenceSpace('local-floor');
   viewerSpace = await session.requestReferenceSpace('viewer');
   hitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
 }
