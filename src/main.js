@@ -23,6 +23,27 @@ const raycaster = new THREE.Raycaster();
 let lastHoverCell = null;
 let lastHoverTarget = null; // 'player' | 'ai' | null
 
+// Board Positioning State
+let boardPositioningMode = false;
+let boardPositioningLocked = false;
+let boardGrabState = {
+  isGrabbing: false,
+  controller: null,
+  initialGrabPose: null,
+  initialBoardTransform: { position: null, quaternion: null },
+  grabOffset: new THREE.Vector3()
+};
+
+// Hand tracking für Pinch
+let handTracking = {
+  enabled: false,
+  leftHand: null,
+  rightHand: null,
+  pinchThreshold: 0.8,
+  isPinching: false,
+  lastPinchState: false
+};
+
 // Debug (aus)
 let debugRay = null;
 let debugDot = null;
@@ -249,10 +270,10 @@ async function init() {
   debugDot = new THREE.Mesh(new THREE.SphereGeometry(0.01, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffff00 }));
   debugDot.visible = false; scene.add(debugDot);
 
-  // AR-Button
+  // AR-Button mit Hand-Tracking
   const btn = ARButton.createButton(renderer, {
     requiredFeatures: ['hit-test'],
-    optionalFeatures: ['dom-overlay'],
+    optionalFeatures: ['dom-overlay', 'hand-tracking'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
@@ -316,8 +337,28 @@ async function onSessionStart(){
   referenceSpace = await session.requestReferenceSpace('local');
   viewerSpace = await session.requestReferenceSpace('viewer');
   hitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
+  
+  // Hand-Tracking initialisieren
+  if (session.enabledFeatures?.includes('hand-tracking')) {
+    handTracking.enabled = true;
+    try {
+      handTracking.leftHand = renderer.xr.getHand(0);
+      handTracking.rightHand = renderer.xr.getHand(1);
+      scene.add(handTracking.leftHand);
+      scene.add(handTracking.rightHand);
+    } catch (e) {
+      console.warn('Hand-Tracking Setup fehlgeschlagen:', e);
+      handTracking.enabled = false;
+    }
+  }
 }
-function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; }
+function onSessionEnd(){ 
+  hitTestSource=null; viewerSpace=null; referenceSpace=null;
+  handTracking.enabled = false;
+  handTracking.leftHand = null;
+  handTracking.rightHand = null;
+  resetBoardPositioning();
+}
 
 function animate(){ renderer.setAnimationLoop(render); }
 
@@ -339,6 +380,9 @@ function render(_, frame) {
   }
 
   if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
+
+  // Board-Positionierung updaten
+  updateBoardPositioning(frame);
 
   const ray = getXRRay(frame);
   if (!ray) {
@@ -430,8 +474,8 @@ function getXRRay(frame){
 
 // ---------- Interaktion ----------
 async function onSelect(){
-  // 1) Bretter platzieren
-  if (!boardPlayer && !boardAI && reticle.visible) {
+  // 1) Bretter platzieren oder positionieren
+  if (!boardPlayer && !boardAI && reticle.visible && !boardPositioningMode) {
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
 
@@ -454,8 +498,9 @@ async function onSelect(){
 
     createStatsSprite();
 
-    game.beginPlacement();
-    setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
+    // Board-Positionierungsmodus aktivieren
+    enterBoardPositioning();
+    setHUD(`Bretter platziert! Bewege sie mit Controller oder Händen. Trigger oder Pinch zum Arretieren.`);
     SFX.toggle(btnAudio?.textContent.includes('an'));
     return;
   }
@@ -1033,3 +1078,282 @@ function createStatsSprite(){
 }
 
 function updateStatsHUD(){ if(!hudStats||!game) return; const ps=game.stats.player; const as=game.stats.ai; hudStats.textContent=`Du: ${ps.shots} Schüsse, ${ps.hits} Treffer, ${ps.sunk} versenkt | KI: ${as.shots} Schüsse, ${as.hits} Treffer, ${as.sunk} versenkt`; if(statsCtx && statsTex){ statsCtx.clearRect(0,0,statsCanvas.width,statsCanvas.height); statsCtx.fillStyle='rgba(0,0,0,0.55)'; statsCtx.fillRect(0,0,statsCanvas.width,statsCanvas.height); statsCtx.fillStyle='#fff'; statsCtx.font='40px sans-serif'; statsCtx.textBaseline='top'; statsCtx.fillText(`Du: ${ps.shots} Schüsse, ${ps.hits} Treffer, ${ps.sunk} versenkt`,20,40); statsCtx.fillText(`KI: ${as.shots} Schüsse, ${as.hits} Treffer, ${as.sunk} versenkt`,20,140); statsTex.needsUpdate=true; } }
+
+// ---------- Board Positioning System ----------
+function enterBoardPositioning() {
+  boardPositioningMode = true;
+  boardPositioningLocked = false;
+  
+  // Visuelle Indikatoren für bewegbare Bretter hinzufügen
+  addBoardPositioningIndicators();
+}
+
+function exitBoardPositioning() {
+  boardPositioningMode = false;
+  boardPositioningLocked = true;
+  boardGrabState.isGrabbing = false;
+  
+  // Indikatoren entfernen
+  removeBoardPositioningIndicators();
+  
+  // Spiel beginnen
+  game.beginPlacement();
+  setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
+}
+
+function resetBoardPositioning() {
+  boardPositioningMode = false;
+  boardPositioningLocked = false;
+  boardGrabState.isGrabbing = false;
+  boardGrabState.controller = null;
+  handTracking.isPinching = false;
+  handTracking.lastPinchState = false;
+}
+
+function addBoardPositioningIndicators() {
+  if (!boardPlayer || !boardAI) return;
+  
+  // Glowing border für bewegbare Bretter
+  const glowMaterial = new THREE.LineBasicMaterial({ 
+    color: 0x00ff88, 
+    transparent: true, 
+    opacity: 0.8,
+    linewidth: 3
+  });
+  
+  // Player board indicator
+  const playerGlow = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1.04, 1.04)),
+    glowMaterial.clone()
+  );
+  playerGlow.rotateX(-Math.PI / 2);
+  playerGlow.position.y = 0.002;
+  playerGlow.name = 'positioningIndicator';
+  boardPlayer.add(playerGlow);
+  
+  // AI board indicator
+  const aiGlow = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1.04, 1.04)),
+    glowMaterial.clone()
+  );
+  aiGlow.rotateX(-Math.PI / 2);
+  aiGlow.position.y = 0.002;
+  aiGlow.name = 'positioningIndicator';
+  boardAI.add(aiGlow);
+}
+
+function removeBoardPositioningIndicators() {
+  [boardPlayer, boardAI].forEach(board => {
+    if (!board) return;
+    const indicators = board.children.filter(child => child.name === 'positioningIndicator');
+    indicators.forEach(indicator => {
+      board.remove(indicator);
+      if (indicator.geometry) indicator.geometry.dispose();
+      if (indicator.material) indicator.material.dispose();
+    });
+  });
+}
+
+function updateBoardPositioning(frame) {
+  if (!boardPositioningMode || boardPositioningLocked || !frame || !referenceSpace) return;
+  
+  // Controller-basierte Bewegung
+  updateControllerGrabbing(frame);
+  
+  // Hand-basierte Bewegung (Pinch)
+  if (handTracking.enabled) {
+    updateHandGrabbing(frame);
+  }
+  
+  // Arretierungs-Input checken
+  checkPositioningLockInput();
+}
+
+function updateControllerGrabbing(frame) {
+  const session = renderer.xr.getSession();
+  
+  for (const controller of controllers) {
+    const inputSource = controller.userData.inputSource;
+    if (!inputSource) continue;
+    
+    const pose = frame.getPose(inputSource.targetRaySpace, referenceSpace);
+    if (!pose) continue;
+    
+    const controllerPos = new THREE.Vector3().copy(pose.transform.position);
+    const controllerQuat = new THREE.Quaternion().copy(pose.transform.orientation);
+    
+    // Check ob Controller nahe einem Brett ist
+    const nearBoard = getNearestBoard(controllerPos);
+    
+    if (nearBoard && !boardGrabState.isGrabbing) {
+      const gamepad = inputSource.gamepad;
+      const gripPressed = gamepad?.buttons[1]?.pressed; // Grip button
+      
+      if (gripPressed) {
+        startBoardGrab(controller, nearBoard, controllerPos, controllerQuat);
+      }
+    } else if (boardGrabState.isGrabbing && boardGrabState.controller === controller) {
+      // Board bewegen
+      moveBoardWithController(controllerPos, controllerQuat);
+      
+      // Check if grip released
+      const gamepad = inputSource.gamepad;
+      const gripPressed = gamepad?.buttons[1]?.pressed;
+      if (!gripPressed) {
+        stopBoardGrab();
+      }
+    }
+  }
+}
+
+function updateHandGrabbing(frame) {
+  if (!handTracking.leftHand || !handTracking.rightHand) return;
+  
+  // Pinch-Erkennung für beide Hände
+  const leftPinch = getHandPinchStrength(handTracking.leftHand);
+  const rightPinch = getHandPinchStrength(handTracking.rightHand);
+  
+  const currentPinching = leftPinch > handTracking.pinchThreshold || rightPinch > handTracking.pinchThreshold;
+  
+  if (currentPinching && !handTracking.lastPinchState && !boardGrabState.isGrabbing) {
+    // Pinch gestartet
+    const activeHand = leftPinch > rightPinch ? handTracking.leftHand : handTracking.rightHand;
+    const handPos = new THREE.Vector3().setFromMatrixPosition(activeHand.matrixWorld);
+    const nearBoard = getNearestBoard(handPos);
+    
+    if (nearBoard) {
+      const handQuat = new THREE.Quaternion().setFromRotationMatrix(activeHand.matrixWorld);
+      startBoardGrab(activeHand, nearBoard, handPos, handQuat);
+      handTracking.isPinching = true;
+    }
+  } else if (handTracking.isPinching && boardGrabState.isGrabbing) {
+    // Board mit Hand bewegen
+    const activeHand = boardGrabState.controller;
+    const handPos = new THREE.Vector3().setFromMatrixPosition(activeHand.matrixWorld);
+    const handQuat = new THREE.Quaternion().setFromRotationMatrix(activeHand.matrixWorld);
+    moveBoardWithController(handPos, handQuat);
+    
+    if (!currentPinching) {
+      stopBoardGrab();
+      handTracking.isPinching = false;
+    }
+  }
+  
+  handTracking.lastPinchState = currentPinching;
+}
+
+function getHandPinchStrength(hand) {
+  // Vereinfachte Pinch-Erkennung basierend auf Hand-Joints
+  if (!hand.joints || !hand.joints['index-finger-tip'] || !hand.joints['thumb-tip']) {
+    return 0;
+  }
+  
+  const indexTip = hand.joints['index-finger-tip'];
+  const thumbTip = hand.joints['thumb-tip'];
+  
+  if (!indexTip.visible || !thumbTip.visible) return 0;
+  
+  const distance = indexTip.position.distanceTo(thumbTip.position);
+  // Je näher die Fingerspitzen, desto höher die Pinch-Stärke
+  return Math.max(0, Math.min(1, (0.05 - distance) / 0.03));
+}
+
+function getNearestBoard(position) {
+  if (!boardPlayer || !boardAI) return null;
+  
+  const playerDist = position.distanceTo(boardPlayer.position);
+  const aiDist = position.distanceTo(boardAI.position);
+  
+  const threshold = 0.3; // 30cm
+  
+  if (playerDist < threshold && (aiDist >= threshold || playerDist < aiDist)) {
+    return boardPlayer;
+  } else if (aiDist < threshold) {
+    return boardAI;
+  }
+  
+  return null;
+}
+
+function startBoardGrab(controller, board, controllerPos, controllerQuat) {
+  boardGrabState.isGrabbing = true;
+  boardGrabState.controller = controller;
+  boardGrabState.initialBoardTransform = {
+    position: board.position.clone(),
+    quaternion: board.quaternion.clone()
+  };
+  
+  // Offset zwischen Controller und Board-Position
+  boardGrabState.grabOffset.copy(board.position).sub(controllerPos);
+  
+  hapticPulse(0.3, 80);
+  SFX.place();
+}
+
+function moveBoardWithController(controllerPos, controllerQuat) {
+  if (!boardGrabState.isGrabbing || !boardPlayer || !boardAI) return;
+  
+  // Neue Position basierend auf Controller + Offset
+  const newPos = controllerPos.clone().add(boardGrabState.grabOffset);
+  
+  // Bestimme welches Board bewegt wird
+  const movingBoard = getNearestBoard(boardGrabState.initialBoardTransform.position);
+  const otherBoard = (movingBoard === boardPlayer) ? boardAI : boardPlayer;
+  
+  if (movingBoard) {
+    movingBoard.position.copy(newPos);
+    movingBoard.quaternion.copy(controllerQuat);
+    
+    // Andere Board relativ positionieren
+    if (otherBoard) {
+      const offsetLocal = new THREE.Vector3(BOARD_GAP, 0, 0);
+      const offsetWorld = offsetLocal.clone().applyQuaternion(controllerQuat);
+      
+      if (movingBoard === boardPlayer) {
+        otherBoard.position.copy(newPos).add(offsetWorld);
+      } else {
+        otherBoard.position.copy(newPos).sub(offsetWorld);
+      }
+      otherBoard.quaternion.copy(controllerQuat);
+    }
+    
+    // Labels und Stats-Sprite entsprechend bewegen
+    updateBoardLabelsAndStats(movingBoard, controllerQuat);
+  }
+}
+
+function stopBoardGrab() {
+  boardGrabState.isGrabbing = false;
+  boardGrabState.controller = null;
+  hapticPulse(0.2, 40);
+}
+
+function updateBoardLabelsAndStats(referenceBoard, quaternion) {
+  if (labelPlayer && boardPlayer) {
+    placeLabelAboveBoard(labelPlayer, boardPlayer, quaternion);
+  }
+  if (labelAI && boardAI) {
+    placeLabelAboveBoard(labelAI, boardAI, quaternion);
+  }
+  if (statsSprite && boardAI) {
+    const offset = new THREE.Vector3(0.8, 0.25, -0.6).applyQuaternion(quaternion);
+    statsSprite.position.copy(boardAI.position).add(offset);
+  }
+}
+
+function checkPositioningLockInput() {
+  // Check für Trigger-Press zum Arretieren
+  for (const controller of controllers) {
+    const gamepad = controller.userData.inputSource?.gamepad;
+    if (!gamepad) continue;
+    
+    const triggerPressed = gamepad.buttons[0]?.pressed; // Trigger
+    
+    if (triggerPressed) {
+      exitBoardPositioning();
+      hapticPulse(0.5, 100);
+      SFX.hit();
+      break;
+    }
+  }
+}
