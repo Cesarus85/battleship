@@ -144,6 +144,21 @@ const setupConfig = (() => {
   return { sizeSel, fleetInput };
 })();
 
+const btnRotate = (() => {
+  const btn = document.createElement('button');
+  btn.id = 'btnRotate';
+  btn.className = 'btn';
+  btn.style.right = '292px';
+  btn.textContent = '↺ Drehen';
+  preventXRSelect(btn);
+  btn.onclick = () => {
+    const dir = game.toggleOrientation();
+    setHUD(`Phase: ${game.phase}`, dir);
+  };
+  document.body.appendChild(btn);
+  return btn;
+})();
+
 // Labels
 let labelPlayer = null;
 let labelAI = null;
@@ -820,7 +835,12 @@ function pollRotateButtons(){
     const state = prevButtons.get(c) ?? { mask:0, t0:0, handled:false };
 
     const justBY = ((mask & (1<<IDX.BY)) && !(state.mask & (1<<IDX.BY)));
-    if (justBY) { setHUD(`Phase: ${game.phase} — Ausrichtung: ${game.toggleOrientation()}`); SFX.rotate(); hapticPulse(0.25, 40); }
+    if (justBY) {
+      const dir = game.toggleOrientation();
+      setHUD(`Phase: ${game.phase}`, dir);
+      SFX.rotate();
+      hapticPulse(0.25, 40);
+    }
 
     // Langer Triggerdruck zum Entfernen des letzten Schiffs
     if (mask & (1<<IDX.TRIGGER)) {
@@ -1026,7 +1046,12 @@ function markPeerShot(i, j, hit, silent=false) {
 }
 
 // ---------- HUD ----------
-function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
+function setHUD(t, dir){
+  const hud = document.getElementById('hud');
+  if (!hud) return;
+  const small = hud.querySelector('.small');
+  small.textContent = dir ? `${t} | Ausrichtung: ${dir}` : t;
+}
 function createStatsSprite(){
   statsCanvas = document.createElement('canvas');
   // Increase canvas width so longer text fits without wrapping
