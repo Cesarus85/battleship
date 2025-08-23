@@ -1343,23 +1343,30 @@ function moveBoardWithController(controllerPos, controllerQuat) {
   
   if (movingBoard) {
     movingBoard.position.copy(newPos);
-    movingBoard.quaternion.copy(controllerQuat);
-    
+
+    // Nur Yaw aus der Controller-Quaternion extrahieren
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(controllerQuat);
+    forward.y = 0;
+    if (forward.lengthSq() > 0) forward.normalize();
+    const yaw = Math.atan2(forward.x, forward.z);
+    const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    movingBoard.quaternion.copy(yawQuat);
+
     // Andere Board relativ positionieren
     if (otherBoard) {
       const offsetLocal = new THREE.Vector3(BOARD_GAP, 0, 0);
-      const offsetWorld = offsetLocal.clone().applyQuaternion(controllerQuat);
-      
+      const offsetWorld = offsetLocal.clone().applyQuaternion(yawQuat);
+
       if (movingBoard === boardPlayer) {
         otherBoard.position.copy(newPos).add(offsetWorld);
       } else {
         otherBoard.position.copy(newPos).sub(offsetWorld);
       }
-      otherBoard.quaternion.copy(controllerQuat);
+      otherBoard.quaternion.copy(yawQuat);
     }
-    
+
     // Labels und Stats-Sprite entsprechend bewegen
-    updateBoardLabelsAndStats(movingBoard, controllerQuat);
+    updateBoardLabelsAndStats(movingBoard, yawQuat);
   }
 }
 
