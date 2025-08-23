@@ -458,6 +458,12 @@ async function onSelect(){
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
 
+    const cam = renderer.xr.getCamera(camera);
+    const lookAt = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
+    baseQuat.setFromRotationMatrix(
+      new THREE.Matrix4().lookAt(basePos, lookAt, new THREE.Vector3(0, 1, 0))
+    );
+
     boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
     boardPlayer.position.copy(basePos);
     boardPlayer.quaternion.copy(baseQuat);
