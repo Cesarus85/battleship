@@ -11,24 +11,10 @@ import { sha256Hex, randomSalt } from './crypto.js';
 let scene, camera, renderer;
 let reticle, hitTestSource = null, viewerSpace = null;
 let referenceSpace = null;
-let lastHit = null;
-let lastHitPlane = null;
-let lastPlaneMatrix = null;
-let lowNormalWarned = false;
-
-const RETICLE_COLOR_FOUND = 0x00ffcc;
-const RETICLE_COLOR_NOHIT = 0xff4444;
-const FALLBACK_DISTANCE = 1.0;
-let noHit = false;
-let hudPrevText = '';
-
-let repositioning = false;
 
 let boardPlayer = null;
 let boardAI = null;
-let boardAnchor = null;
 let game = null;
-let boardBaseQuat = new THREE.Quaternion();
 
 const controllers = [];
 const raycaster = new THREE.Raycaster();
@@ -48,7 +34,6 @@ const overlayMsg = document.getElementById('overlayMsg');
 const btnAgain = document.getElementById('btnAgain');
 const btnReset = document.getElementById('btnReset');
 const btnAudio = document.getElementById('btnAudio');
-const btnReposition = document.getElementById('btnReposition');
 
 // HUD-Statistiken
 const hudStats = (() => {
@@ -166,7 +151,6 @@ let labelAI = null;
 const prevButtons = new Map();
 const IDX = { BY: 4, TRIGGER: 0 };
 const BOARD_GAP = 1.2;
-const boardAIOffset = new THREE.Vector3(BOARD_GAP, 0, 0);
 let clock = new THREE.Clock();
 let effects = [];
 
@@ -241,7 +225,7 @@ async function init() {
   // Retikel
   reticle = new THREE.Mesh(
     new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2),
-    new THREE.MeshBasicMaterial({ color: RETICLE_COLOR_FOUND, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
+    new THREE.MeshBasicMaterial({ color: 0x00ffcc, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
   );
   reticle.visible = false;
   scene.add(reticle);
@@ -267,7 +251,8 @@ async function init() {
 
   // AR-Button
   const btn = ARButton.createButton(renderer, {
-    optionalFeatures: ['dom-overlay', 'anchors', 'hand-tracking', 'hit-test'],
+    requiredFeatures: ['hit-test'],
+    optionalFeatures: ['dom-overlay'],
     domOverlay: { root: document.body }
   });
   document.body.appendChild(btn);
@@ -285,14 +270,13 @@ async function init() {
     btnAudio.textContent = on ? '🔇 SFX aus' : '🔊 SFX an';
     if (on) { SFX.place(); hapticPulse(0.2, 40); }
   });
-  btnReposition?.addEventListener('click', () => startReposition());
 
   mpHostBtn?.addEventListener('click', () => startMP(true));
   mpJoinBtn?.addEventListener('click', () => startMP(false));
   mpLeaveBtn?.addEventListener('click', () => stopMP());
 
   newGame();
-  setHUD('Starte AR-Sitzung...');
+  setHUD(`Phase: ${game.phase} — Platziere die Bretter mit Trigger.`);
 }
 
 function parseFleetInput(str = '') {
@@ -331,96 +315,9 @@ async function onSessionStart(){
   const session = renderer.xr.getSession();
   referenceSpace = await session.requestReferenceSpace('local');
   viewerSpace = await session.requestReferenceSpace('viewer');
-  hitTestSource = await session.requestHitTestSource?.({
-    space: viewerSpace,
-    entityTypes: ['plane', 'point']
-  });
-  spawnBoardInFront();
+  hitTestSource = await session.requestHitTestSource?.({ space: referenceSpace });
 }
-function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; boardAnchor=null; }
-
-function startReposition(){
-  if (!boardPlayer || !boardAI) return;
-  repositioning = true;
-  if (boardAnchor) { try { boardAnchor.delete?.(); } catch{} }
-  boardAnchor = null;
-  btnReposition.textContent = 'Brett fixieren';
-  const baseQuat = camera.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -Math.PI/2));
-  boardBaseQuat.copy(baseQuat);
-  setHUD('Brett verschieben: Hand folgen und mit Pinch fixieren.');
-}
-
-function spawnBoardInFront() {
-  if (boardPlayer || boardAI) return;
-  const camPos = new THREE.Vector3();
-  camera.getWorldPosition(camPos);
-  const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
-  const basePos = camPos.add(dir.multiplyScalar(0.4));
-  const baseQuat = camera.quaternion.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -Math.PI/2));
-  boardBaseQuat.copy(baseQuat);
-
-  boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
-  boardPlayer.position.copy(basePos);
-  boardPlayer.quaternion.copy(baseQuat);
-  scene.add(boardPlayer);
-
-  boardAI = new Board({ size: 1.0, divisions: game.ai.board.size });
-  const offsetWorld = boardAIOffset.clone().applyQuaternion(baseQuat);
-  boardAI.position.copy(basePos).add(offsetWorld);
-  boardAI.quaternion.copy(baseQuat);
-  scene.add(boardAI);
-
-  labelPlayer = makeTextSprite('DU', '#2ad3ff', '#001018');
-  labelAI = makeTextSprite('GEGNER', '#ff5a5a', '#220000');
-  placeLabelAboveBoard(labelPlayer, boardPlayer, baseQuat);
-  placeLabelAboveBoard(labelAI, boardAI, baseQuat);
-
-  createStatsSprite();
-  btnReposition.textContent = 'Brett verschieben';
-
-  game.beginPlacement();
-  setHUD(`Phase: ${game.phase} — Platziere deine Schiffe (Y/B: drehen, Trigger: setzen).`);
-}
-
-function updateBoardFromHand(frame) {
-  const session = renderer.xr.getSession();
-  const handInput = session?.inputSources?.find(src => src.hand);
-  if (!handInput) return;
-  const indexTip = handInput.hand.get('index-finger-tip');
-  if (!indexTip) return;
-  const tipPose = frame.getJointPose(indexTip, referenceSpace);
-  if (!tipPose) return;
-  const { x, y, z } = tipPose.transform.position;
-
-  boardPlayer.position.set(x, y, z);
-  boardPlayer.quaternion.copy(boardBaseQuat);
-  const offsetWorld = boardAIOffset.clone().applyQuaternion(boardBaseQuat);
-  boardAI.position.set(x + offsetWorld.x, y + offsetWorld.y, z + offsetWorld.z);
-  boardAI.quaternion.copy(boardBaseQuat);
-  const q = boardBaseQuat;
-  if (labelPlayer) labelPlayer.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardPlayer.position));
-  if (labelAI) labelAI.position.copy(new THREE.Vector3(0,0.08,-0.6).applyQuaternion(q).add(boardAI.position));
-  if (statsSprite) statsSprite.position.copy(boardAI.position).add(new THREE.Vector3(0.8,0.25,-0.6).applyQuaternion(q));
-
-  const thumbTip = handInput.hand.get('thumb-tip');
-  if (thumbTip) {
-    const thumbPose = frame.getJointPose(thumbTip, referenceSpace);
-    if (thumbPose) {
-      const tp = thumbPose.transform.position;
-      const dx = x - tp.x, dy = y - tp.y, dz = z - tp.z;
-      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-      if (dist < 0.03) {
-        repositioning = false;
-        btnReposition.textContent = 'Brett verschieben';
-        setHUD(`Phase: ${game.phase}`);
-        if (frame.createAnchor) {
-          const anchorPose = new XRRigidTransform({ x, y, z }, { x: q.x, y: q.y, z: q.z, w: q.w });
-          frame.createAnchor(anchorPose, referenceSpace).then(a => { boardAnchor = a; }).catch(()=>{});
-        }
-      }
-    }
-  }
-}
+function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; }
 
 function animate(){ renderer.setAnimationLoop(render); }
 
@@ -428,106 +325,26 @@ function render(_, frame) {
   const dt = clock.getDelta();
 
   // Hit-Test solange keine Boards
-  if (frame && hitTestSource && (!boardPlayer && !boardAI)) {
+  if (frame && hitTestSource && !boardPlayer && !boardAI) {
     const hits = frame.getHitTestResults(hitTestSource);
-    let found = false;
     if (hits?.length) {
-      const refSpace = renderer.xr.getReferenceSpace();
-      for (const hit of hits) {
-        const pose = hit.getPose?.(refSpace);
-        if (!pose) continue;
-
+      const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
+      if (pose) {
+        reticle.visible = true;
+        // Set position from hit test result, with offset to place directly on surface
+        reticle.position.set(
+          pose.transform.position.x, 
+          pose.transform.position.y - 0.05, // Lower offset to compensate for floating
+          pose.transform.position.z
+        );
+        // Use the original rotation logic but ensure proper surface alignment
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-        const normal = new THREE.Vector3(0, 1, 0)
-          .applyQuaternion(new THREE.Quaternion().setFromRotationMatrix(m));
-
-        if (normal.y >= 0.6) {
-          reticle.visible = true;
-          // Set position from hit test result, with small offset to place on surface
-          reticle.position.set(
-            pose.transform.position.x,
-            pose.transform.position.y + 0.001, // Minimal offset to avoid z-fighting
-            pose.transform.position.z
-          );
-          // Use the original rotation logic but ensure proper surface alignment
-          reticle.quaternion.setFromRotationMatrix(m);
-          lastHit = hit;
-          lastHitPlane = hit?.plane || null;
-          if (lastHitPlane) {
-            const planePose = frame.getPose(lastHitPlane.planeSpace, refSpace);
-            lastPlaneMatrix = planePose ? new THREE.Matrix4().fromArray(planePose.transform.matrix) : null;
-          } else {
-            lastPlaneMatrix = null;
-          }
-          found = true;
-          break;
-        } else {
-          reticle.visible = true;
-          // Set position from hit test result, with small offset to place on surface
-          reticle.position.set(
-            pose.transform.position.x,
-            pose.transform.position.y + 0.001, // Minimal offset to avoid z-fighting
-            pose.transform.position.z
-          );
-          // Use the original rotation logic but ensure proper surface alignment
-          reticle.quaternion.setFromRotationMatrix(m);
-          if (!lowNormalWarned) {
-            console.warn('Surface is steep; placement may be unreliable.');
-            lowNormalWarned = true;
-          }
-          lastHit = hit;
-          lastHitPlane = hit?.plane || null;
-          if (lastHitPlane) {
-            const planePose = frame.getPose(lastHitPlane.planeSpace, refSpace);
-            lastPlaneMatrix = planePose ? new THREE.Matrix4().fromArray(planePose.transform.matrix) : null;
-          } else {
-            lastPlaneMatrix = null;
-          }
-          found = true;
-          break;
-        }
+        reticle.quaternion.setFromRotationMatrix(m);
       }
-    }
-    if (!found) {
-      const camPos = new THREE.Vector3();
-      camera.getWorldPosition(camPos);
-      const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-      reticle.visible = true;
-      reticle.position.copy(camPos.add(dir.multiplyScalar(FALLBACK_DISTANCE)));
-      reticle.quaternion.copy(camera.quaternion);
-      lastHit = null;
-      if (!noHit) {
-        hudPrevText = getHUDText();
-        setHUD('Keine Ebene erkannt – Objekt wird vor dir platziert.');
-        reticle.material.color.setHex(RETICLE_COLOR_NOHIT);
-        noHit = true;
-      }
-    } else if (noHit) {
-      reticle.material.color.setHex(RETICLE_COLOR_FOUND);
-      setHUD(hudPrevText);
-      noHit = false;
-    }
+    } else reticle.visible = false;
   }
 
   if (!referenceSpace || !frame) { renderer.render(scene, camera); return; }
-
-  if (boardAnchor && boardPlayer && boardAI) {
-    const anchorPose = frame.getPose(boardAnchor.anchorSpace, referenceSpace);
-    if (anchorPose) {
-      const { position, orientation } = anchorPose.transform;
-      const anchorPos = new THREE.Vector3(position.x, position.y, position.z);
-      const anchorQuat = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-      boardPlayer.position.copy(anchorPos);
-      boardPlayer.quaternion.copy(anchorQuat);
-      const offsetWorld = boardAIOffset.clone().applyQuaternion(anchorQuat);
-      boardAI.position.copy(anchorPos).add(offsetWorld);
-      boardAI.quaternion.copy(anchorQuat);
-    }
-  }
-
-  if (repositioning && boardPlayer && boardAI) {
-    updateBoardFromHand(frame);
-  }
 
   const ray = getXRRay(frame);
   if (!ray) {
@@ -617,79 +434,12 @@ function getXRRay(frame){
   return { origin, direction, controller:null };
 }
 
-function pointInPolygon(pt, poly) {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].x, zi = poly[i].y;
-    const xj = poly[j].x, zj = poly[j].y;
-    const intersect = ((zi > pt.y) !== (zj > pt.y)) &&
-      (pt.x < (xj - xi) * (pt.y - zi) / (zj - zi) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
-function boardOverhang(pos, quat, plane, planeMatrix, size) {
-  if (!plane || !plane.polygon || !planeMatrix) return false;
-  const inv = new THREE.Matrix4().copy(planeMatrix).invert();
-  const half = size / 2;
-  const corners = [
-    new THREE.Vector3(-half, 0, -half),
-    new THREE.Vector3(-half, 0, half),
-    new THREE.Vector3(half, 0, half),
-    new THREE.Vector3(half, 0, -half)
-  ];
-  const polygon = [];
-  if (Array.isArray(plane.polygon)) {
-    for (const p of plane.polygon) {
-      polygon.push(new THREE.Vector2(p.x, p.z));
-    }
-  } else {
-    for (let i = 0; i < plane.polygon.length; i += 3) {
-      polygon.push(new THREE.Vector2(plane.polygon[i], plane.polygon[i + 2]));
-    }
-  }
-  for (const c of corners) {
-    const world = c.clone().applyQuaternion(quat).add(pos);
-    const local = world.clone().applyMatrix4(inv);
-    const pt = new THREE.Vector2(local.x, local.z);
-    if (!pointInPolygon(pt, polygon)) return true;
-  }
-  return false;
-}
-
-function addOverhangVisual(board) {
-  const geom = new THREE.EdgesGeometry(new THREE.PlaneGeometry(board.size + 0.04, board.size + 0.04));
-  const mat = new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 });
-  const line = new THREE.LineSegments(geom, mat);
-  line.rotateX(-Math.PI / 2);
-  line.position.y = 0.015;
-  board.add(line);
-}
-
 // ---------- Interaktion ----------
 async function onSelect(){
-  if (repositioning) return;
   // 1) Bretter platzieren
   if (!boardPlayer && !boardAI && reticle.visible) {
     const basePos = reticle.position.clone();
     const baseQuat = reticle.quaternion.clone();
-    const offsetWorld = boardAIOffset.clone().applyQuaternion(baseQuat);
-    const aiPos = basePos.clone().add(offsetWorld);
-
-    let overPlayer = false, overAI = false;
-    if (lastHitPlane && lastPlaneMatrix) {
-      overPlayer = boardOverhang(basePos, baseQuat, lastHitPlane, lastPlaneMatrix, 1.0);
-      overAI = boardOverhang(aiPos, baseQuat, lastHitPlane, lastPlaneMatrix, 1.0);
-      if (overPlayer || overAI) {
-        const ok = confirm('Brett ragt über Tisch hinaus – trotzdem platzieren?');
-        if (!ok) return;
-      }
-    }
-
-    if (lastHit?.createAnchor) {
-      try { boardAnchor = await lastHit.createAnchor(); } catch (e) { console.warn('Anchor creation failed', e); }
-    }
 
     boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
     boardPlayer.position.copy(basePos);
@@ -697,14 +447,11 @@ async function onSelect(){
     scene.add(boardPlayer);
 
     boardAI = new Board({ size: 1.0, divisions: game.ai.board.size });
-    boardAI.position.copy(aiPos);
+    const offsetLocal = new THREE.Vector3(BOARD_GAP, 0, 0);
+    const offsetWorld = offsetLocal.clone().applyQuaternion(baseQuat);
+    boardAI.position.copy(basePos).add(offsetWorld);
     boardAI.quaternion.copy(baseQuat);
     scene.add(boardAI);
-
-    if (overPlayer) addOverhangVisual(boardPlayer);
-    if (overAI) addOverhangVisual(boardAI);
-
-    lastHit = null;
 
     labelPlayer = makeTextSprite('DU', '#2ad3ff', '#001018');
     labelAI = makeTextSprite('GEGNER', '#ff5a5a', '#220000');
@@ -1170,7 +917,7 @@ function resetGame() {
   hideOverlay();
   clearBoardsAndLabels();
   newGame();
-  spawnBoardInFront();
+  setHUD('Zurückgesetzt. Platziere die Bretter neu (Trigger).');
 }
 
 function clearBoardsAndLabels() {
@@ -1185,12 +932,7 @@ function clearBoardsAndLabels() {
   if (statsTex) statsTex.dispose();
   statsSprite = null; statsCanvas = null; statsCtx = null; statsTex = null;
   boardPlayer = null; boardAI = null; labelPlayer = null; labelAI = null;
-  boardAnchor = null;
   lastHoverCell = null; lastHoverTarget = null;
-  repositioning = false;
-  boardBaseQuat.identity();
-  if (btnReposition) btnReposition.textContent = 'Brett verschieben';
-  reticle.visible = false;
 }
 
 // ---------- Effekte ----------
@@ -1276,7 +1018,6 @@ function markPeerShot(i, j, hit, silent=false) {
 
 // ---------- HUD ----------
 function setHUD(t){ const hud=document.getElementById('hud'); if(hud) hud.querySelector('.small').textContent=t; }
-function getHUDText(){ const hud=document.getElementById('hud'); return hud ? hud.querySelector('.small').textContent : ''; }
 function createStatsSprite(){
   statsCanvas = document.createElement('canvas');
   // Increase canvas width so longer text fits without wrapping
