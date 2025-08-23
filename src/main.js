@@ -494,13 +494,13 @@ async function onSelect(){
   // 1) Bretter platzieren oder positionieren
   if (!boardPlayer && !boardAI && reticle.visible && !boardPositioningMode) {
     const basePos = reticle.position.clone();
-    const baseQuat = reticle.quaternion.clone();
 
-    const cam = renderer.xr.getCamera(camera);
-    const lookAt = new THREE.Vector3().setFromMatrixPosition(cam.matrixWorld);
-    baseQuat.setFromRotationMatrix(
-      new THREE.Matrix4().lookAt(basePos, lookAt, new THREE.Vector3(0, 1, 0))
-    );
+    const camQ = renderer.xr.getCamera(camera).quaternion;
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camQ);
+    fwd.y = 0;
+    fwd.normalize();
+    const yaw = Math.atan2(fwd.x, fwd.z);
+    const baseQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
 
     boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
     boardPlayer.position.copy(basePos);
