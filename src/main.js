@@ -315,7 +315,7 @@ async function onSessionStart(){
   const session = renderer.xr.getSession();
   referenceSpace = await session.requestReferenceSpace('local');
   viewerSpace = await session.requestReferenceSpace('viewer');
-  hitTestSource = await session.requestHitTestSource?.({ space: referenceSpace });
+  hitTestSource = await session.requestHitTestSource?.({ space: viewerSpace });
 }
 function onSessionEnd(){ hitTestSource=null; viewerSpace=null; referenceSpace=null; }
 
@@ -331,13 +331,7 @@ function render(_, frame) {
       const pose = hits[0].getPose(renderer.xr.getReferenceSpace());
       if (pose) {
         reticle.visible = true;
-        // Set position from hit test result, with offset to place directly on surface
-        reticle.position.set(
-          pose.transform.position.x, 
-          pose.transform.position.y - 0.05, // Lower offset to compensate for floating
-          pose.transform.position.z
-        );
-        // Use the original rotation logic but ensure proper surface alignment
+        reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
         reticle.quaternion.setFromRotationMatrix(m);
       }
