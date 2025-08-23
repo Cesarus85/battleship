@@ -503,7 +503,7 @@ async function onSelect(){
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camQ);
     fwd.y = 0;
     fwd.normalize();
-    const yaw = Math.atan2(fwd.x, fwd.z);
+    const yaw = Math.atan2(fwd.x, fwd.z) + Math.PI;
     const baseQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
 
     boardPlayer = new Board({ size: 1.0, divisions: game.player.board.size });
@@ -1352,7 +1352,7 @@ function moveBoardWithController(controllerPos, controllerQuat) {
     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(controllerQuat);
     forward.y = 0;
     if (forward.lengthSq() > 0) forward.normalize();
-    const yaw = Math.atan2(forward.x, forward.z);
+    const yaw = Math.atan2(forward.x, forward.z) + Math.PI;
     const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
     movingBoard.quaternion.copy(yawQuat);
 
