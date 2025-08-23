@@ -143,7 +143,8 @@ export class Board extends THREE.Group {
       opacity: 0.9
     });
 
-    for (const c of cells) {
+    for (let k = 0; k < cells.length; k++) {
+      const c = cells[k];
       const p = this.cellCenterLocal(c.i, c.j);
 
       const quad = new THREE.Mesh(new THREE.PlaneGeometry(this.cellSize, this.cellSize), fillMat);
@@ -159,17 +160,39 @@ export class Board extends THREE.Group {
       edges.rotateX(-Math.PI / 2);
       edges.position.set(p.x, 0.0002, p.z);
       this.ghostGroup.add(edges);
+
+      if (k === 0) {
+        const end = cells[cells.length - 1];
+        const startPos = p.clone();
+        startPos.y = 0.001;
+        const endPos = this.cellCenterLocal(end.i, end.j);
+        endPos.y = 0.001;
+        const dir = new THREE.Vector3().subVectors(endPos, startPos).normalize();
+        const len = startPos.distanceTo(endPos);
+        const arrow = new THREE.ArrowHelper(
+          dir,
+          startPos,
+          len,
+          valid ? 0x00ff66 : 0xff3366,
+          this.cellSize * 0.5,
+          this.cellSize * 0.2
+        );
+        arrow.name = 'ghostArrow';
+        this.ghostGroup.add(arrow);
+      }
     }
   }
 
   clearGhost() {
-    for (const child of this.ghostGroup.children) {
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) {
-        if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-        else child.material.dispose();
+    this.ghostGroup.traverse(obj => {
+      if (obj !== this.ghostGroup) {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+          else obj.material.dispose();
+        }
       }
-    }
+    });
     this.ghostGroup.clear();
   }
 
