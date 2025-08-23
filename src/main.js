@@ -391,7 +391,11 @@ function render(_, frame) {
         reticle.visible = true;
         reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
         const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
-        reticle.quaternion.setFromRotationMatrix(m);
+        const euler = new THREE.Euler().setFromRotationMatrix(m, 'YXZ');
+        const yaw = euler.y;
+        reticle.quaternion.copy(
+          new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw)
+        );
       }
     } else reticle.visible = false;
   }
