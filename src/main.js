@@ -55,6 +55,7 @@ const overlayMsg = document.getElementById('overlayMsg');
 const btnAgain = document.getElementById('btnAgain');
 const btnReset = document.getElementById('btnReset');
 const btnAudio = document.getElementById('btnAudio');
+const btnRelocate = document.getElementById('btnRelocate');
 
 // HUD-Statistiken
 const hudStats = (() => {
@@ -284,6 +285,7 @@ async function init() {
 
   // UI Events
   btnReset?.addEventListener('click', () => resetGame());
+  btnRelocate?.addEventListener('click', () => relocateBoards());
   btnAgain?.addEventListener('click', () => { hideOverlay(); resetGame(); });
   btnAudio?.addEventListener('click', () => {
     const on = btnAudio.textContent.includes('an');
@@ -957,6 +959,14 @@ function resetGame() {
   clearBoardsAndLabels();
   newGame();
   setHUD('Zurückgesetzt. Platziere die Bretter neu (Trigger).');
+}
+
+function relocateBoards() {
+  clearBoardsAndLabels();
+  resetBoardPositioning();
+  game.phase = PHASE.INIT;
+  if (reticle) reticle.visible = true;
+  setHUD('Bretter entfernt. Platziere die Bretter neu (Trigger).');
 }
 
 function clearBoardsAndLabels() {
